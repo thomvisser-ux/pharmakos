@@ -882,7 +882,7 @@ fn the_rules_hash_is_pinned_to_the_committed_table() {
     // match fields none, so the chain in tests/golden/determinism did not.
     assert_eq!(
         hex(rules().rules_hash()),
-        "f5f7d5132e45e4e8",
+        "f223d48786bda2c8",
         "the rules hash moved; say in the pull request which row changed and why"
     );
 }

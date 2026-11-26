@@ -225,6 +225,9 @@ pub struct Scratch {
     pub(crate) survey_scout_lost: Tally,
     pub(crate) survey_crowded_out: Tally,
     pub(crate) survey_under_threat: Tally,
+    /// Needed Survey sightings past the most due a decision weighs
+    /// (`crate::survey::Drop::Unweighed`), each once a Push.
+    pub(crate) survey_unweighed: Tally,
     pub(crate) survey_drops_unlogged: Tally,
     /// What naming a Survey drop's reason remembers of the running Push, and
     /// its drop log ([`crate::survey::Memory`]).
@@ -451,6 +454,7 @@ impl Scratch {
             survey_scout_lost: Tally::ZERO,
             survey_crowded_out: Tally::ZERO,
             survey_under_threat: Tally::ZERO,
+            survey_unweighed: Tally::ZERO,
             survey_drops_unlogged: Tally::ZERO,
             survey: crate::survey::Memory::new(),
         })
@@ -714,6 +718,18 @@ impl Scratch {
         self.survey_under_threat.read()
     }
 
+    /// Needed Survey sightings that ranked past the most due a decision
+    /// weighs since the last reset, each once a Push
+    /// (`crate::survey::Drop::Unweighed`): a seat held more needed sightings
+    /// than one decision's lists take, and these were asked of no list.
+    ///
+    /// # Errors
+    ///
+    /// [`TallyOverflow`] once the count passed `u64::MAX`.
+    pub const fn survey_unweighed(&self) -> Result<u64, TallyOverflow> {
+        self.survey_unweighed.read()
+    }
+
     /// Survey drops, listings or scouts of a Push past the room
     /// [`crate::survey::Memory`] reserves: counted here, so a drop whose
     /// reason the memory could not name is never silent, and the drop is not
@@ -751,6 +767,7 @@ impl Scratch {
                 crate::survey::Drop::ScoutLost => self.survey_scout_lost.bump(),
                 crate::survey::Drop::CrowdedOut => self.survey_crowded_out.bump(),
                 crate::survey::Drop::UnderThreat => self.survey_under_threat.bump(),
+                crate::survey::Drop::Unweighed => self.survey_unweighed.bump(),
             },
             Err(crate::survey::Full) => self.survey_drops_unlogged.bump(),
         }
@@ -783,6 +800,7 @@ impl Scratch {
         self.survey_scout_lost = Tally::ZERO;
         self.survey_crowded_out = Tally::ZERO;
         self.survey_under_threat = Tally::ZERO;
+        self.survey_unweighed = Tally::ZERO;
         self.survey_drops_unlogged = Tally::ZERO;
         self.survey.clear();
     }

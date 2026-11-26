@@ -867,12 +867,10 @@ fn the_survey_scenario_pins_its_beats() {
         SURVEY_KEEPS_A_CORE_FRESH,
         &[
             // A scout comes within sight of seat 1's core, in round 1.
-            (3_981, "enemy_beacon_found", Some(0)),
+            (3_986, "enemy_beacon_found", Some(0)),
             // The first refresh and the last.
-            (6_121, "sighting_refreshed", Some(0)),
-            (22_856, "sighting_refreshed", Some(0)),
-            // Every cell of the probe area looked at once.
-            (14_466, "area_surveyed", Some(0)),
+            (6_131, "sighting_refreshed", Some(0)),
+            (24_206, "sighting_refreshed", Some(0)),
         ],
     );
     let ticks_of = |kind: &str, seat: u8| -> Vec<u32> {
@@ -885,13 +883,13 @@ fn the_survey_scenario_pins_its_beats() {
     };
     assert_eq!(
         ticks_of("enemy_beacon_found", 0),
-        vec![3_981],
+        vec![3_986],
         "the core is found once"
     );
     assert_eq!(
         ticks_of("area_surveyed", 0),
-        vec![14_466],
-        "the area is reported surveyed once"
+        Vec::<u32>::new(),
+        "the area is never reported surveyed: the scouts sent to its last cells are lost at the gun"
     );
     let refreshed = ticks_of("sighting_refreshed", 0);
     let within = |from: u32, to: u32| {
@@ -906,12 +904,12 @@ fn the_survey_scenario_pins_its_beats() {
             within(ROUND_2, ROUND_3),
             within(ROUND_3, u32::MAX)
         ),
-        (0, 8, 5),
+        (0, 9, 10),
         "no refresh is due in round 1, and each longer Push has its own: {refreshed:?}"
     );
     assert_eq!(
         ticks_of("unit_destroyed", 0),
-        vec![9_848, 10_098, 14_537, 20_177],
-        "the scouts lost walking through the core's gun to a cell beyond it"
+        vec![10_489, 11_032, 14_334, 17_635, 20_933, 24_247],
+        "the scouts lost inside the core's gun, walking to a cell on its far side or back from one"
     );
 }

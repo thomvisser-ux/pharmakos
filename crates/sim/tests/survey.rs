@@ -374,16 +374,76 @@ fn a_cell_older_than_reach_memory_is_scanned_again_nearest_first() {
     );
 }
 
+/// **Unexplored ground first, over a walk already begun** (spec section 6;
+/// S3's `tune3`, review 1). A walk gives a scout no hold on its cell: a scout
+/// walking to a cell due a re-scan turns to an unexplored cell as soon as
+/// one is open to it.
+/// Every cell but the nearest is explored at tick 0 and due past reach
+/// memory; the first scout takes the unexplored cell, so the second, which
+/// may not claim it, sets off for the nearest due one; the first scout dies,
+/// and the second turns to the unexplored cell on its next decision.
+#[test]
+fn a_scout_walking_to_a_due_cell_turns_to_an_unexplored_one_that_opens() {
+    let mut world = world();
+    let post = survey_post(&mut world);
+    let cells = strip(&mut world, post, 20, 68);
+    assert!(cells.len() >= 3, "the area spans several cells: {cells:?}");
+    for cell in cells.iter().skip(1) {
+        assert!(world.mark_explored_directly(seat(0), *cell));
+    }
+    let window = world.rules().attack().reach_memory.to_ticks_floor();
+
+    let mut runner = pushing(world);
+    let mut feed = Vec::new();
+    play_to(&mut runner, window + 10, &mut feed);
+    let first = scout_of(runner.world_mut(), post);
+    let second = scout_of(runner.world_mut(), post);
+    // Two decisions' worth of ticks: both scouts are sent.
+    play(&mut runner, 20, &mut feed);
+    let target = |runner: &Runner, scout| cell_of(column(going(runner.world(), scout)));
+    assert_eq!(
+        (target(&runner, first), target(&runner, second)),
+        (Some(cells[0]), Some(cells[1])),
+        "the first scout takes the unexplored cell, the second the nearest due one"
+    );
+    runner
+        .world_mut()
+        .request_damage(DamageOrder {
+            target: DamageTarget::Unit(first),
+            amount: Damage::new(1_000_000).expect("a positive amount"),
+            by: seat(1),
+            source: None,
+        })
+        .expect("the order is filed");
+    play(&mut runner, 20, &mut feed);
+    assert!(
+        runner.world().units().row_of(first).is_err()
+            || !runner.world().units().hit_points()
+                [runner.world().units().row_of(first).unwrap().index()]
+            .is_alive(),
+        "the first scout is dead"
+    );
+    assert!(
+        runner
+            .world()
+            .explored()
+            .explored_on(seat(0), cells[0])
+            .is_none(),
+        "the recipe: the unexplored cell is still unexplored"
+    );
+    assert_eq!(
+        target(&runner, second),
+        Some(cells[0]),
+        "the second scout leaves its due cell for the unexplored one"
+    );
+}
+
 /// The tick a Survey scout first renews a due cell in
 /// `a_cell_older_than_reach_memory_is_scanned_again_nearest_first`.
-///
-/// It was 3 961 until S3's `tune3`: a scout keeps the cell it set off for
-/// (`survey::scan_walk`), so it no longer turns aside for the nearer cell
-/// that falls due while it walks, and reaches this one fifteen ticks sooner.
-const RENEWAL_TICK: u32 = 3_946;
+const RENEWAL_TICK: u32 = 3_961;
 
 /// The chain's hash on [`RENEWAL_TICK`].
-const RENEWAL_HASH: u64 = 0x4a56_0120_0749_a5eb;
+const RENEWAL_HASH: u64 = 0xf795_cf68_97a4_d21c;
 
 /// Fix pass 1, C1 (AGENTS.md section 4.8, the second place): a save and a
 /// restore with both of snapshot 16's columns filled. A Survey scout has

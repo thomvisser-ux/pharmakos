@@ -152,7 +152,7 @@ pub const NO_CARRIER: u32 = u32::MAX;
 /// What one wall column costs the breach search to pass, on top of the step
 /// onto it: the demolition cost of E23's second cost mode.
 ///
-/// PLACEHOLDER: the breach search's demolition cost per wall column, ten cardinal steps — owner, at S3's demo (item 152 (1) 2), with `tune3`'s balance re-run.
+/// PLACEHOLDER: the breach search's demolition cost per wall column, ten cardinal steps — owner, at S3's demo (item 152 (1) 2), kept by `tune3` with no balance re-run under item 213's answer 22.
 pub const BREACH_COLUMN_COST: i32 = 100;
 
 /// How many states (a column, before a wall is crossed or after) one breach

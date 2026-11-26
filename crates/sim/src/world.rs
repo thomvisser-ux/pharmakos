@@ -305,12 +305,15 @@ const TARGETS_PER_BEACON: u32 = 16;
 /// A seat forgets its own stalest sighting for room
 /// ([`SightingTable::see`]), and what a seat sees this tick is the newest it
 /// holds. So with room for every live asset, a seat never forgets something
-/// it is looking at: what falls out is a memory of something gone, or one it
-/// has not seen for longest, the order Survey refreshes in. An asset's id
-/// carries its row's generation, so the memories of assets since destroyed
-/// are rows of their own, and they are the ones this room does not count
-/// and the eviction drops first. The world counts every memory forgotten
-/// for room, by seat ([`World::sightings_forgotten_by`]).
+/// it is looking at: what falls out is the memory it has not renewed for
+/// longest, the order Survey refreshes in, whether the thing remembered
+/// still stands or not (a seat does not know which, and the eviction reads
+/// nothing a seat does not know). An asset's id carries its row's
+/// generation, so the memories of assets since destroyed are rows of their
+/// own, which this room does not count: they are what can bring a seat to
+/// its room, and each ages out of being seen, so it is among the stalest
+/// in time. The world counts every memory forgotten for room, by seat
+/// ([`World::sightings_forgotten_by`]).
 ///
 /// It was 64 a seat until the gate's load was measured with room to spare
 /// (S3's `cert3` watch, re-run by `tune3` at a room of 4 096): the seats
@@ -900,7 +903,12 @@ impl SightingDrops {
             Sighted::NewOverStalest => {
                 match self.forgotten.get_mut(usize::from(seat.raw())) {
                     Some(count) => *count = count.saturating_add(1),
-                    // A seat the world does not seat holds no memory to forget.
+                    // The table refuses a sighting for a seat it holds no
+                    // rows for before it forgets anything
+                    // (`SightingTable::see`), and it holds rows for the
+                    // world's seats, so no memory is forgotten for a seat
+                    // with no count here. Were one, it is counted with the
+                    // refusals, never left uncounted.
                     None => self.refused = self.refused.saturating_add(1),
                 }
             }
@@ -9928,7 +9936,7 @@ mod ids_tests {
         assert_eq!(reloaded.rules_hash(), committed.rules_hash());
         assert_eq!(
             format!("{:016x}", committed.rules_hash()),
-            "f5f7d5132e45e4e8",
+            "f223d48786bda2c8",
             "the committed table's rules hash is the one every golden names"
         );
     }

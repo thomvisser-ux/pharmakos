@@ -1108,6 +1108,19 @@ pub enum SnapshotError {
         /// count.
         room: u32,
     },
+    /// One of the match's seats holds more sightings than its room
+    /// ([`crate::tables::SightingTable::per_seat`]), which play never passes:
+    /// a seat at its room forgets its stalest for each new sighting
+    /// (`SightingTable::see`). Restored, that seat's rows would take the
+    /// room another seat's sightings are owed (S3's `tune3`, E17).
+    OverSightingRoom {
+        /// The seat: one of the match's.
+        seat: u8,
+        /// How many sightings the snapshot gives it.
+        rows: u32,
+        /// The most one seat remembers in this world.
+        room: u32,
+    },
 }
 
 impl core::fmt::Display for SnapshotError {
@@ -1203,6 +1216,11 @@ impl core::fmt::Display for SnapshotError {
                 f,
                 "the snapshot gives seat {seat}'s Attack beacons {areas} avoid areas, past its \
                  room: a seat of a match of its seat count holds at most {room}"
+            ),
+            SnapshotError::OverSightingRoom { seat, rows, room } => write!(
+                f,
+                "the snapshot gives seat {seat} {rows} sightings, past its room: a seat of this \
+                 world remembers at most {room}"
             ),
         }
     }
@@ -1865,7 +1883,7 @@ impl Snapshot {
 
         let targets = self.restore_targets(world)?;
         Self::check_list_rooms(&beacons, &targets, &attack, seat_count)?;
-        let sightings = self.restore_sightings(world)?;
+        let sightings = self.restore_sightings(world, seat_count)?;
         let credit = self.restore_credit(world)?;
 
         let (voxels, chunks, features, bore, generated) = self.restore_store(world, seat_count)?;
@@ -2029,19 +2047,25 @@ impl Snapshot {
     /// Returns [`SnapshotError::Ragged`], including when the `(seat, asset)`
     /// key is not strictly ascending — which is the order the table's own
     /// search assumes, so a file that broke it would restore into a table whose
-    /// lookups silently missed.
-    fn restore_sightings(&self, world: &World) -> Result<SightingTable, SnapshotError> {
+    /// lookups silently missed; [`SnapshotError::OutOfRange`] for a row of a
+    /// seat the snapshot does not seat; and
+    /// [`SnapshotError::OverSightingRoom`] for a seat holding more than its
+    /// room. The table itself refuses each
+    /// ([`SightingTable::restore`]), so no table is ever built that its own
+    /// rules do not allow.
+    fn restore_sightings(
+        &self,
+        world: &World,
+        seat_count: u32,
+    ) -> Result<SightingTable, SnapshotError> {
         // A sighting is taken on a tick already played (S3's `pred`, fix pass
         // 1): freshness reads its age as the snapshot's tick less it.
         if self.sighting_seen_at.iter().any(|seen| *seen > self.tick) {
             return Err(SnapshotError::OutOfRange("sighting_seen_at"));
         }
-        let capacity = world.sightings().capacity();
-        let mut sightings =
-            SightingTable::with_room(world.seats().len(), world.sightings().per_seat());
-        if !sightings.restore(
-            capacity,
-            SightingColumns {
+        let mut sightings = SightingTable::with_room(seat_count, world.sightings().per_seat());
+        sightings
+            .restore(SightingColumns {
                 seat: self.sighting_seat.clone(),
                 asset: self.sighting_asset.clone(),
                 owner: self.sighting_owner.clone(),
@@ -2050,10 +2074,16 @@ impl Snapshot {
                 at: points_from_axes(&self.sighting_at)
                     .ok_or(SnapshotError::Ragged("sighting_at"))?,
                 seen_at: self.sighting_seen_at.clone(),
-            },
-        ) {
-            return Err(SnapshotError::Ragged("sighting"));
-        }
+            })
+            .map_err(|refused| match refused {
+                crate::tables::SightingsRefused::Ragged => SnapshotError::Ragged("sighting"),
+                crate::tables::SightingsRefused::Unseated { .. } => {
+                    SnapshotError::OutOfRange("sighting_seat")
+                }
+                crate::tables::SightingsRefused::OverRoom { seat, rows, room } => {
+                    SnapshotError::OverSightingRoom { seat, rows, room }
+                }
+            })?;
         Ok(sightings)
     }
 

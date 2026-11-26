@@ -170,10 +170,10 @@ Written per S2's plan, decisions 18 and 29 (ruled by decisions-log item
 **The Rusher's band is open (S3, rules revision 8).** Measured by `tune3` on
 the twenty committed seeds at rules revision 8, where a scout sees 28 voxels
 and so sights a core from outside the core's gun: the Rusher is the sole
-winner of 18 of 20 (90 %), the Hunter of 9 (45 %), the Turtle of 0. Eighteen
-is over the band's 13. Easy launches a raid in 7 of the 60 matches, every one
-of them against the Turtle (7 of its 20 seeds; none against the Rusher or the
-Hunter, which take Easy's forward beacons first: it loses 5.4 beacons a match
+winner of 16 of 20 (80 %), the Hunter of 9 (45 %), the Turtle of 0. Sixteen
+is over the band's 13. Easy launches a raid in 3 of the 60 matches, every one
+of them against the Turtle (3 of its 20 seeds; none against the Rusher or the
+Hunter, which take Easy's forward beacons first: it loses 5.3 beacons a match
 to the Rusher). The band is open and acknowledged by the owner (2026-11-25:
 balance detail is relaxed until further notice), no row is moved to close it,
 and the tuning task it opens is carried, with what was measured

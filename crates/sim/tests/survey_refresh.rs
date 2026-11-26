@@ -532,7 +532,10 @@ fn surveyed_on(rules: RulesTable, seed: u64, seats: u32) -> Vec<Lull> {
 ///   edge, having renewed the core and whatever else it saw from there, and
 ///   a sighting it cannot see from there is not renewed. An enemy beacon's
 ///   sighting is never excused this way: a scout that sees the gun over a
-///   beacon sees the beacon; or
+///   beacon sees the beacon. **This excuse stands on a question held for
+///   the owner** (S3's `tune3`, Q1a: whether a unit or structure sighting
+///   under a seen gun should go stale): it states the rules as they stand,
+///   and it goes if the owner rules that such a sighting must be renewed; or
 /// * when its Push dropped it as out of reach and for no other reason
 ///   (`Drop::OutOfReach` alone: never listed, and no scout alone could reach
 ///   it before the Lull); or
@@ -697,14 +700,12 @@ const SIGHT_BEFORE_REVISION_8: u32 = 24;
 /// commander's sighting 245 s old at round 3's Lull, last dropped as a scout
 /// lost: on the decision after the third death, 13 s before the Lull, neither
 /// living scout could reach it on the walk the router serves (159 s and
-/// 174 s). Round 2 holds it fresh, and round 4 loses it the same way:
-/// three scouts lost at the core, and on the decision after the third,
-/// 15 s before the Lull, neither living scout could reach it.
+/// 174 s). Rounds 2 and 4 hold it fresh.
 ///
-/// The committed table's scout sees 28 from revision 8 and loses nobody here
-/// ([`seed_29_loses_no_scout_at_the_committed_sight`]); the case stays
-/// scripted at 24 because it is the one that runs the replacement and the
-/// too-late excuse end to end.
+/// The committed table's scout sees 28 from revision 8, and the same seed
+/// plays otherwise there ([`seed_29_at_the_committed_sight`]); the case
+/// stays scripted at 24 because it is the one that runs the replacement and
+/// the too-late excuse end to end.
 #[test]
 fn seed_29_loses_the_commander_behind_the_core_to_its_third_scout() {
     let lulls = surveyed_on(sighted_rules(SIGHT_BEFORE_REVISION_8), 29, 2);
@@ -750,42 +751,26 @@ fn seed_29_loses_the_commander_behind_the_core_to_its_third_scout() {
         how == "a scout lost on 9337; on 9341, 259 ticks before the Lull, no scout could reach it (walks [3182, 3474])",
         "{how}"
     );
-    assert!(at(2).stale.is_empty(), "round 2 fresh");
-    let fourth = at(4);
-    assert_eq!(
-        fourth.deaths,
-        vec![13922, 18782, 18902],
-        "round 4's three deaths at the core"
-    );
-    assert_eq!(
-        fourth
-            .stale
-            .iter()
-            .map(|(kind, asset, age, verdict)| (*kind, *asset, *age, verdict.clone()))
-            .collect::<Vec<_>>(),
-        vec![(
-            AssetKind::Commander.id(),
-            4,
-            5279,
-            Ok(String::from(
-                "a scout lost on 18902; on 18906, 294 ticks before the Lull, no scout could reach it (walks [3360, 3474])"
-            ))
-        )],
-        "round 4: the commander again, 264 s old, lost to the third death"
+    assert!(
+        at(2).stale.is_empty() && at(4).stale.is_empty(),
+        "rounds 2 and 4 fresh"
     );
 }
 
 /// Seed 29 with two seats on the committed table, whose scout sights a core
-/// from outside the core gun (rules revision 8): seat 0 loses no scout in any
-/// Push, never fields a replacement, and holds every enemy beacon's sighting
-/// fresh at every Lull. The scouts turn back from the core at the edge of its
-/// gun (decision 12), so the one sighting they cannot renew from there, seat
-/// 1's commander two columns behind its core, is stale at round 3's and round
-/// 4's Lulls, dropped as under threat: the case
-/// [`seed_29_loses_the_commander_behind_the_core_to_its_third_scout`] loses
-/// three scouts a Push to at the sight before.
+/// from outside the core gun (rules revision 8). Its outcome, exactly: seat
+/// 0 holds every enemy beacon's sighting fresh at every Lull; it loses no
+/// scout in rounds 2 and 3 and one in round 4 (on tick 14203, replaced on
+/// 14211 and sent off on its first decision); and one sighting is stale at
+/// round 3's Lull and one at round 4's, each dropped as under threat: seat
+/// 1's commander, two columns behind its core, and then a unit of seat 1's.
+/// A scout turns back from a core at the edge of its gun (decision 12), so a
+/// sighting it cannot renew from there goes stale: the question held for the
+/// owner as `tune3`'s Q1a. At the sight before, the same seed loses three
+/// scouts in round 2's Push
+/// ([`seed_29_loses_the_commander_behind_the_core_to_its_third_scout`]).
 #[test]
-fn seed_29_loses_no_scout_at_the_committed_sight() {
+fn seed_29_at_the_committed_sight() {
     let scout = rules().unit(UnitKind::Scout).vision_radius_voxels;
     let gun = rules().core_weapon().range_voxels;
     assert!(
@@ -800,30 +785,17 @@ fn seed_29_loses_no_scout_at_the_committed_sight() {
             lull.round, lull.stale, lull.deaths, lull.fielded, lull.drops
         );
         assert!(
-            lull.deaths.is_empty() && lull.fielded.is_empty() && lull.lost == 0,
-            "round {}: no scout lost and none replaced",
-            lull.round
-        );
-        assert_eq!(lull.scouts, 2, "round {}: both scouts alive", lull.round);
-        assert!(
             lull.beacon.is_none_or(|age| age <= window()),
             "round {}: every enemy beacon fresh: {:?}",
             lull.round,
             lull.beacon
         );
-        for (kind, asset, _, verdict) in &lull.stale {
-            assert_eq!(
-                (*kind, *asset),
-                (AssetKind::Commander.id(), 4),
-                "round {}: only seat 1's commander is stale: {:?}",
-                lull.round,
-                lull.stale
-            );
+        for (_, _, _, verdict) in &lull.stale {
             assert!(
                 verdict
                     .as_ref()
                     .is_ok_and(|how| how.starts_with("under a gun the seat saw on ")),
-                "round {}: and it was dropped as under threat: {verdict:?}",
+                "round {}: a stale sighting was dropped as under threat: {verdict:?}",
                 lull.round
             );
         }
@@ -831,10 +803,31 @@ fn seed_29_loses_no_scout_at_the_committed_sight() {
     assert_eq!(
         lulls
             .iter()
-            .map(|lull| lull.stale.len())
+            .map(|lull| (lull.deaths.clone(), lull.fielded.clone()))
             .collect::<Vec<_>>(),
-        vec![0, 1, 1],
-        "fresh at round 2's Lull, the commander stale at round 3's and round 4's"
+        vec![
+            (vec![], vec![]),
+            (vec![], vec![]),
+            (vec![14203], vec![(14211, 4105, true)]),
+        ],
+        "no scout lost in rounds 2 and 3, and one in round 4, replaced and sent off at once"
+    );
+    assert_eq!(
+        lulls
+            .iter()
+            .map(|lull| {
+                lull.stale
+                    .iter()
+                    .map(|(kind, asset, _, _)| (*kind, *asset))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            vec![],
+            vec![(AssetKind::Commander.id(), 4)],
+            vec![(AssetKind::Unit.id(), 5)],
+        ],
+        "fresh at round 2's Lull, the commander stale at round 3's, a unit at round 4's"
     );
 }
 
@@ -1558,7 +1551,7 @@ fn never_turned_on_the_spot(walked: &[Vec<(u32, [i32; 2])>]) -> usize {
     compared
 }
 
-/// A scout keeps the scan cell it set off for (`survey::scan_walk`), on the
+/// No scout turns on the spot at the edge of its sight of a gun, on the
 /// committed table, whose scout sights a core from outside the core's gun
 /// (rules revision 8): the match `scenarios/s3/survey-keeps-a-core-fresh`
 /// played when the defect was found (its probe area then reached north to
@@ -1571,10 +1564,14 @@ fn never_turned_on_the_spot(walked: &[Vec<(u32, [i32; 2])>]) -> usize {
 /// that picked its nearest open cell afresh on every decision stood on the
 /// edge of its sight of the core from the tick it found it (4226) to the end
 /// of the match, turning toward a cell under the gun, away from it and back,
-/// over the same two columns. Held here: no scout walks for a minute inside a
-/// box of eight columns. (A scout that sights a gun over the cell it set off
-/// for does turn round, once, and walks back the way it came: that is the
-/// rule, and a box of eight columns over a minute lets it.)
+/// over the same two columns, because the cell stayed unexplored and was open
+/// again whenever the gun left its sight. A scout walking to a cell whose
+/// scan column a seen gun covers has now looked at it
+/// (`survey::seen_under_a_gun`), so the cell draws it back only once, a
+/// reach memory later. Held here: no scout walks for a minute inside a box
+/// of eight columns. (A scout that sights a gun over the cell it set off for
+/// does turn round, once, and walks back the way it came: that is the rule,
+/// and a box of eight columns over a minute lets it.)
 #[test]
 fn a_walking_scout_is_never_turned_on_the_spot_at_the_edge_of_its_sight() {
     let mut world = world(0x0000_0000_CA5C_ADED, 2, vec![300_000, 480_000], 2);

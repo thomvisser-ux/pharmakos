@@ -23,6 +23,14 @@
 //! * a commit is tested against its own seat's room, and another seat's rows
 //!   count for nothing;
 //! * a restore refuses a save in which a seat holds more than its room.
+//!
+//! The tie to the size budget is to the **committed** table: a change that
+//! raises `verifier.size_budget_units` past a room, or past a ceiling, turns
+//! the first test here red, so the row and the rooms move together or not at
+//! all. A table sized past them for a measurement (the bench's
+//! `sized_rules`) still loads: under it a playbook past a ceiling is refused
+//! at compile and a commit past a room fails its step, each typed, and no
+//! guarantee is made for it.
 
 #![allow(
     clippy::expect_used,
