@@ -365,6 +365,12 @@ impl Clusters {
     /// are fallible and silent: a cluster above `u16::MAX` would leave every
     /// column in it at `of_node = 0` and `local_comp = NO_COMP`, so the oracle
     /// would answer confidently and wrongly rather than refusing to build.
+    ///
+    /// `None` as well when `scratch` does not serve the decomposition
+    /// ([`Scratch::serves`]): building the inner edges is itself a search,
+    /// and a scratch sized for another map or another cluster edge has no
+    /// slot for some of what this one numbers. [`Scratch::for_map`] at this
+    /// `size` always serves it.
     #[must_use]
     pub fn new(surface: &Surface, shape: ClusterShape, scratch: &mut Scratch) -> Option<Clusters> {
         let size = shape.size;
@@ -446,6 +452,9 @@ impl Clusters {
             y = y.saturating_add(1);
         }
 
+        if !scratch.serves(surface, &built) {
+            return None;
+        }
         built.rebuild_all(surface, scratch);
         Some(built)
     }
@@ -1084,8 +1093,10 @@ impl Clusters {
         }
     }
 
-    /// How many columns a cluster holds: a field's length.
-    fn cluster_cells(&self) -> usize {
+    /// How many columns a cluster holds: a field's length, and the room a
+    /// search bounded to one cluster needs
+    /// ([`Scratch::serves`](crate::pathing::search::Scratch::serves)).
+    pub(crate) fn cluster_cells(&self) -> usize {
         self.max_trans_per_border
             .saturating_mul(self.max_trans_per_border)
     }

@@ -256,7 +256,9 @@ fn abstract_search_with(
 
     abstract_begin(scratch);
     let h0 = surface.heuristic(start, goal);
-    abstract_reach(scratch, temp_start, 0, temp_start);
+    if !abstract_reach(scratch, temp_start, 0, temp_start) {
+        return None;
+    }
     scratch.abstract_heap.push(Item {
         f: h0,
         h: h0,
@@ -902,20 +904,29 @@ fn abstract_came(scratch: &Scratch, node: u32) -> u32 {
         .unwrap_or(node)
 }
 
-fn abstract_reach(scratch: &mut Scratch, node: u32, cost: i32, from: u32) {
+/// Record the abstract node `node` as reached at `cost` from `from`, and
+/// whether it was recorded: `false` for a node the scratch has no slot for,
+/// which the search then never queues (`Scratch::set_reached`'s reason: a
+/// node queued without a record never reads as seen or closed, and its
+/// search never ends). A scratch that serves the decomposition
+/// ([`Scratch::serves`]) has a slot for every node.
+#[must_use]
+fn abstract_reach(scratch: &mut Scratch, node: u32, cost: i32, from: u32) -> bool {
     let epoch = scratch.abstract_epoch;
     let Ok(index) = usize::try_from(node) else {
-        return;
+        return false;
     };
-    if let Some(slot) = scratch.abstract_stamp.get_mut(index) {
-        *slot = epoch;
-    }
-    if let Some(slot) = scratch.abstract_g.get_mut(index) {
-        *slot = cost;
-    }
-    if let Some(slot) = scratch.abstract_came.get_mut(index) {
-        *slot = from;
-    }
+    let (Some(stamp), Some(g), Some(came)) = (
+        scratch.abstract_stamp.get_mut(index),
+        scratch.abstract_g.get_mut(index),
+        scratch.abstract_came.get_mut(index),
+    ) else {
+        return false;
+    };
+    *stamp = epoch;
+    *g = cost;
+    *came = from;
+    true
 }
 
 fn abstract_relax(
@@ -933,7 +944,9 @@ fn abstract_relax(
     if abstract_seen(scratch, target) && abstract_cost(scratch, target) <= cost {
         return;
     }
-    abstract_reach(scratch, target, cost, from);
+    if !abstract_reach(scratch, target, cost, from) {
+        return;
+    }
     let h = surface.heuristic(target_cell, goal);
     scratch.abstract_heap.push(Item {
         f: cost.saturating_add(h),

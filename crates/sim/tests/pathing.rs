@@ -1414,6 +1414,132 @@ fn counted(scratch: &Scratch) -> [u64; 4] {
     ]
 }
 
+/// A scratch serves the graph it was sized for ([`Scratch::serves`]), and
+/// one sized for another cluster edge or for fewer columns does not: the
+/// decomposition refuses to be built in it, the planning door
+/// ([`pharmakos_sim::pathing::estimate::estimate`]) refuses it typed before
+/// any search, and a search handed it anyway ends.
+///
+/// The last is the regression. A search writes a node's record through
+/// `get_mut` and reads it through `get`, so a node the scratch had no slot
+/// for was queued with no record, never read as seen or closed, and was
+/// queued again by each neighbour it relaxed: the abstract search of a
+/// scratch sized for a cluster edge twice the graph's never ended, and its
+/// heap grew until the machine had no memory left (found by a review mutant
+/// of the gateway's planning scratch, S3's `p3est`). A node with no slot is
+/// now never queued, so each search pops no more than the slots the scratch
+/// has.
+#[test]
+fn a_scratch_that_does_not_fit_its_graph_is_refused_and_its_search_ends() {
+    use pharmakos_sim::pathing::estimate::EstimateError;
+    let fixture = Fixture::build(SEED, CLUSTER);
+    assert!(
+        fixture.scratch.serves(&fixture.surface, &fixture.clusters),
+        "the scratch the decomposition was built in serves it"
+    );
+
+    // Sized for a cluster edge twice this graph's: half the abstract slots.
+    let mut coarse = Scratch::for_map(&fixture.surface, CLUSTER * 2).expect("a scratch");
+    assert!(
+        !coarse.serves(&fixture.surface, &fixture.clusters),
+        "a scratch for clusters of {} has no slot for half of what clusters of {CLUSTER} number",
+        CLUSTER * 2
+    );
+    // Sized as this graph asks but for one of `Scratch::new`'s inputs, each
+    // in turn one short: a column, a cluster's column (a search bounded to a
+    // cluster would grow its buffers), a step of the dearest step (the grid
+    // optimum's ring is too small).
+    let cells = u32::try_from(CLUSTER * CLUSTER).expect("fits");
+    let (columns, step) = (
+        fixture.surface.node_count(),
+        fixture.surface.costs().max_step(),
+    );
+    for (what, columns, cells, step) in [
+        ("one column short of the map", columns - 1, cells, step),
+        ("reserved for a smaller cluster", columns, cells - 1, step),
+        (
+            "ringed for a cheaper dearest step",
+            columns,
+            cells,
+            step - 1,
+        ),
+    ] {
+        let short = Scratch::new(columns, fixture.clusters.abstract_capacity(), cells, step)
+            .expect("a scratch");
+        assert!(
+            !short.serves(&fixture.surface, &fixture.clusters),
+            "a scratch {what}"
+        );
+    }
+
+    assert!(
+        Clusters::new(
+            &fixture.surface,
+            fixture.rules.cluster_shape().with_size(CLUSTER),
+            &mut coarse,
+        )
+        .is_none(),
+        "the decomposition is not built in a scratch that does not serve it"
+    );
+
+    let speed = fixture.commander_speed();
+    let set = pairs(&fixture, 24, 0x5EED_0F17);
+    assert!(set.len() >= 16, "pairs to ask: {}", set.len());
+    for (start, goal) in &set {
+        assert_eq!(
+            pharmakos_sim::pathing::estimate::estimate(
+                &fixture.surface,
+                &fixture.clusters,
+                &mut coarse,
+                *start,
+                *goal,
+                Fog::Clear,
+                speed,
+            ),
+            Err(EstimateError::Misfit),
+            "{start} -> {goal}: the planning door refuses the scratch"
+        );
+    }
+    assert_eq!(
+        (coarse.expansions(), coarse.abstract_expansions()),
+        (Ok(0), Ok(0)),
+        "refused before any search"
+    );
+
+    // Handed to the searches anyway, each ends: no more abstract pops a
+    // search than the scratch has slots.
+    let slots = u64::from(
+        Scratch::abstract_capacity_for(&fixture.surface, CLUSTER * 2).expect("a decomposition"),
+    ) + 2;
+    let mut walk: Vec<Node> = Vec::new();
+    let mut searches: u64 = 0;
+    for (start, goal) in &set {
+        let _ = abstract_search(
+            &fixture.surface,
+            &fixture.clusters,
+            &mut coarse,
+            *start,
+            *goal,
+            Fog::Clear,
+            speed,
+        );
+        let _ = route(
+            &fixture.surface,
+            &fixture.clusters,
+            &mut coarse,
+            *start,
+            *goal,
+            &mut walk,
+        );
+        searches += 2;
+    }
+    let abstract_pops = coarse.abstract_expansions().expect("counted");
+    assert!(
+        abstract_pops <= searches * slots,
+        "{abstract_pops} abstract pops over {searches} searches of {slots} slots each"
+    );
+}
+
 /// S3's `walk3`: a query's counted work is its pops and every visit of its
 /// loops that pops nothing, so an endpoint inserted by lookup, which pops
 /// nothing, is still counted, by the slots it reads. Held against the same

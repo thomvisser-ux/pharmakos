@@ -159,6 +159,12 @@ impl Bound<'_> {
 /// out of the return value.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Scratch {
+    /// How many columns a cluster holds in the decomposition this was sized
+    /// for ([`Scratch::new`]'s `cluster_cells`): the room the cluster-bounded
+    /// buffers (`heap`, `leg`, `line`) were reserved from, kept so that
+    /// [`Scratch::serves`] can answer for them as it does for the indexed
+    /// ones.
+    cluster_cells: u32,
     // --- the low-level half, indexed by column ---
     epoch: u32,
     stamp: Vec<u32>,
@@ -299,6 +305,7 @@ impl Scratch {
         let a = crate::math::index::row(abstract_nodes).saturating_add(2);
         let low_heap = crate::math::index::row(cluster_cells.saturating_mul(8));
         Some(Scratch {
+            cluster_cells,
             epoch: 0,
             stamp: vec![0; n],
             closed: vec![0; n],
@@ -376,6 +383,42 @@ impl Scratch {
             cells,
             surface.costs().max_step(),
         )
+    }
+
+    /// Whether this scratch has the room every search over `surface` and its
+    /// decomposition `clusters` writes: a slot for every column, a slot for
+    /// every abstract node the decomposition numbers and the two temporary
+    /// endpoints a query adds, the room a search bounded to one cluster was
+    /// reserved for (so that a search over it grows no buffer), and a grid
+    /// optimum sized for the surface's columns and its dearest step:
+    /// [`Scratch::new`]'s four inputs, each at least what this graph asks.
+    ///
+    /// **Every search's precondition.** [`Scratch::for_map`] at the
+    /// decomposition's own cluster edge serves it, and
+    /// [`Clusters::new`](crate::pathing::clusters::Clusters::new) refuses a
+    /// scratch that does not. A reader that keeps a scratch of its own beside
+    /// a graph it borrows (the gateway's planning scratch) asks this before
+    /// it lends one. A search handed a scratch that does not serve its graph
+    /// still ends, because a node with no slot is never queued, but what it
+    /// answers is not an answer: [`crate::pathing::estimate::estimate`]
+    /// refuses it typed, and nothing else in the sim is handed any scratch
+    /// but the world's own, made with the world's graph.
+    #[must_use]
+    pub fn serves(&self, surface: &Surface, clusters: &crate::pathing::clusters::Clusters) -> bool {
+        let columns = crate::math::index::row(surface.node_count());
+        let slots = crate::math::index::row(clusters.abstract_capacity()).saturating_add(2);
+        crate::math::index::row(self.cluster_cells) >= clusters.cluster_cells()
+            && self.stamp.len() >= columns
+            && self.closed.len() >= columns
+            && self.g.len() >= columns
+            && self.came.len() >= columns
+            && self.abstract_stamp.len() >= slots
+            && self.abstract_closed.len() >= slots
+            && self.abstract_g.len() >= slots
+            && self.abstract_came.len() >= slots
+            && self
+                .reach
+                .serves(surface.node_count(), surface.costs().max_step())
     }
 
     /// How many abstract node slots a decomposition of `surface` at this
@@ -684,19 +727,29 @@ impl Scratch {
         }
     }
 
-    fn set_reached(&mut self, node: Node, cost: i32, from: Node) {
+    /// Record `node` as reached at `cost` from `from`, and whether it was
+    /// recorded: `false` for a column this scratch has no slot for, which a
+    /// search then never queues. A scratch that serves its graph
+    /// ([`Scratch::serves`]) has a slot for every column, so `false` is a
+    /// scratch handed the wrong graph; a column that could be queued without
+    /// a record would never read as seen or closed, and the search that
+    /// queued it would never end.
+    #[must_use]
+    fn set_reached(&mut self, node: Node, cost: i32, from: Node) -> bool {
         let Ok(index) = usize::try_from(node) else {
-            return;
+            return false;
         };
-        if let Some(slot) = self.stamp.get_mut(index) {
-            *slot = self.epoch;
-        }
-        if let Some(slot) = self.g.get_mut(index) {
-            *slot = cost;
-        }
-        if let Some(slot) = self.came.get_mut(index) {
-            *slot = from;
-        }
+        let (Some(stamp), Some(g), Some(came)) = (
+            self.stamp.get_mut(index),
+            self.g.get_mut(index),
+            self.came.get_mut(index),
+        ) else {
+            return false;
+        };
+        *stamp = self.epoch;
+        *g = cost;
+        *came = from;
+        true
     }
 
     fn cost_at(&self, node: Node) -> i32 {
@@ -813,7 +866,9 @@ fn astar_inner(
     }
     scratch.begin();
     let h0 = surface.heuristic(start, goal);
-    scratch.set_reached(start, 0, start);
+    if !scratch.set_reached(start, 0, start) {
+        return None;
+    }
     scratch.heap.push(Item {
         f: h0,
         h: h0,
@@ -850,7 +905,9 @@ fn astar_inner(
             if scratch.seen(next) && scratch.cost_at(next) <= cost {
                 continue;
             }
-            scratch.set_reached(next, cost, item.n);
+            if !scratch.set_reached(next, cost, item.n) {
+                continue;
+            }
             let h = surface.heuristic(next, goal);
             scratch.heap.push(Item {
                 f: cost.saturating_add(h),
@@ -892,7 +949,9 @@ pub fn dijkstra_bounded(
     if !surface.walkable(source) || !bound.admits(source) {
         return;
     }
-    scratch.set_reached(source, 0, source);
+    if !scratch.set_reached(source, 0, source) {
+        return;
+    }
     scratch.heap.push(Item {
         f: 0,
         h: 0,
@@ -924,7 +983,9 @@ pub fn dijkstra_bounded(
             if scratch.seen(next) && scratch.cost_at(next) <= cost {
                 continue;
             }
-            scratch.set_reached(next, cost, item.n);
+            if !scratch.set_reached(next, cost, item.n) {
+                continue;
+            }
             scratch.heap.push(Item {
                 f: cost,
                 h: 0,

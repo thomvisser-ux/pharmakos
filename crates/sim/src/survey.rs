@@ -2252,9 +2252,10 @@ fn served_walk_ticks<M: crate::seams::Meter + ?Sized>(
     match walk_ticks(walk, speed) {
         Ok(ticks) => ticks.map(i64::from),
         Err(EstimateError::PastCost { .. } | EstimateError::PastTicks { .. }) => Some(i64::MAX),
-        // `walk_ticks` prices a served walk and never meets a chain; were it
-        // to, the chain is one whose queries stopped falling, as above.
-        Err(EstimateError::Stalled { .. }) => {
+        // `walk_ticks` prices a served walk: it searches in no scratch and
+        // meets no chain. Were it to raise either, the walk is unpriced, as a
+        // chain whose queries stopped falling is above.
+        Err(EstimateError::Misfit | EstimateError::Stalled { .. }) => {
             scratch.stalled.bump();
             None
         }

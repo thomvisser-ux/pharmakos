@@ -228,6 +228,24 @@ impl Reach {
     /// dearest step is bounded by the map's path cost (`RulesTable`'s
     /// `path_cost_fits`), and a positive `i32` doubled plus one fits a `u32`.
     pub fn new(nodes: u32, max_step: i32) -> Result<Reach, ReachError> {
+        Reach::sized(nodes, max_step)
+    }
+
+    /// Whether this has the room a map of `nodes` columns whose dearest step
+    /// is `max_step` needs: [`Reach::new`]'s two inputs, each at least as
+    /// large here. Part of [`crate::pathing::search::Scratch::serves`].
+    #[must_use]
+    pub(crate) fn serves(&self, nodes: u32, max_step: i32) -> bool {
+        let ring = u32::try_from(max_step)
+            .ok()
+            .filter(|step| *step > 0)
+            .and_then(|step| step.checked_mul(2))
+            .and_then(|double| double.checked_add(1));
+        self.stamp.len() >= crate::math::index::row(nodes)
+            && ring.is_some_and(|ring| self.ring.get() >= ring)
+    }
+
+    fn sized(nodes: u32, max_step: i32) -> Result<Reach, ReachError> {
         let n = crate::math::index::row(nodes);
         // A step raises a key by at most twice the dearest step (its cost,
         // and the heuristic's rise across it), so this many buckets hold every

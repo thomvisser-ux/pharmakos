@@ -317,9 +317,9 @@ pub fn fog_price(cost: i32, numerator: i32, denominator: i32) -> i32 {
 ///
 /// # Errors
 ///
-/// [`EstimateError`] when the served walk cannot be priced: a chain the router
-/// broke, or a cost past the estimate's `i32`. `Ok(None)` is no route, the
-/// normal answer.
+/// [`EstimateError`] when the served walk cannot be priced: a scratch that
+/// does not serve this graph, a chain the router broke, or a cost past the
+/// estimate's `i32`. `Ok(None)` is no route, the normal answer.
 pub fn estimate(
     world: &Surface,
     clusters: &Clusters,
@@ -329,6 +329,11 @@ pub fn estimate(
     fog: Fog<'_>,
     speed: Speed,
 ) -> Result<Option<Estimate>, EstimateError> {
+    // The precondition, checked at the planning door because this is the one
+    // search a reader outside the sim calls with a scratch of its own.
+    if !scratch.serves(world, clusters) {
+        return Err(EstimateError::Misfit);
+    }
     // A column off the graph has no route at all, as the router says
     // (`NoPath::Unplaced`): no estimate, clear or fogged.
     if clusters.touch(start, goal).is_err() {
@@ -439,6 +444,11 @@ pub fn walk_ticks(walk: ServedWalk, speed: Speed) -> Result<Option<i32>, Estimat
 /// Why [`estimate`] priced no walk for a clear query that has a route.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EstimateError {
+    /// The scratch handed in does not serve this surface and decomposition
+    /// ([`Scratch::serves`]): it was sized for another map or another cluster
+    /// edge. Refused before any search, because a search in it would answer
+    /// from slots it does not have.
+    Misfit,
     /// [`WalkError::Stalled`]: a partial route's next query did not fall, so
     /// the chain that prices the walk could not be trusted to end.
     Stalled {
@@ -466,6 +476,9 @@ pub enum EstimateError {
 impl core::fmt::Display for EstimateError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            EstimateError::Misfit => f.write_str(
+                "the search scratch was sized for another map or cluster edge than this graph's",
+            ),
             EstimateError::Stalled { partials } => write!(
                 f,
                 "a walk's partial route did not bring its next query closer, after {partials} \
