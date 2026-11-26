@@ -50,6 +50,13 @@ pub(crate) const GATE_P99_NS: u128 = 25_000_000;
 /// bench's `MEAN_BAR_NS` as [`GATE_P99_NS`] is to its `P99_BAR_NS`.
 pub(crate) const GATE_MEAN_NS: u128 = 12_500_000;
 
+/// The segment G3′ plays, in ticks, as this alarm holds it: the bench's
+/// `G3_SEGMENT_MS` (8 minutes) over the sim's `MS_PER_TICK`. The bench prints
+/// its own as `segment_ticks`, and a line whose segment differs gives no
+/// verdict ([`BudgetError::PlanMismatch`]): a segment shortened in the bench
+/// alone would otherwise read as complete.
+pub(crate) const PLANNED_SEGMENT_TICKS: u128 = 9_600;
+
 /// Why the alarm gave no verdict. Each one fails the command.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum BudgetError {
@@ -78,6 +85,12 @@ pub(crate) enum BudgetError {
     Inconsistent(&'static str),
     /// The bench printed a bar other than the one this alarm holds.
     BarMismatch {
+        field: &'static str,
+        bench: u128,
+        alarm: u128,
+    },
+    /// The bench printed a planned count other than the one this alarm holds.
+    PlanMismatch {
         field: &'static str,
         bench: u128,
         alarm: u128,
@@ -118,6 +131,15 @@ impl fmt::Display for BudgetError {
             } => write!(
                 f,
                 "the bench prints `{field}` as {bench} and this alarm holds {alarm}: the bar \
+                 moved on one side alone"
+            ),
+            Self::PlanMismatch {
+                field,
+                bench,
+                alarm,
+            } => write!(
+                f,
+                "the bench prints `{field}` as {bench} and this alarm holds {alarm}: the plan \
                  moved on one side alone"
             ),
         }
@@ -211,6 +233,13 @@ pub(crate) fn parse(output: &str) -> Result<Report, BudgetError> {
     };
     if report.ticks == 0 {
         return Err(BudgetError::NoTicks);
+    }
+    if report.segment_ticks != PLANNED_SEGMENT_TICKS {
+        return Err(BudgetError::PlanMismatch {
+            field: "segment_ticks",
+            bench: report.segment_ticks,
+            alarm: PLANNED_SEGMENT_TICKS,
+        });
     }
     if report.ticks < report.segment_ticks {
         return Err(BudgetError::ShortSegment {
@@ -418,6 +447,45 @@ mod tests {
             swap(" mean_bar_ns=12500000", ""),
             Err(BudgetError::MissingField("mean_bar_ns"))
         );
+        // F-b, the must-trip of the planned segment: shortened in the bench
+        // alone, with a played count to match, it is no verdict.
+        assert_eq!(
+            swap(
+                "ticks=9600 segment_ticks=9600",
+                "ticks=4800 segment_ticks=4800"
+            ),
+            Err(BudgetError::PlanMismatch {
+                field: "segment_ticks",
+                bench: 4_800,
+                alarm: PLANNED_SEGMENT_TICKS
+            })
+        );
+    }
+
+    /// F-b, the other side: this alarm's planned segment is the bench's
+    /// `G3_SEGMENT_MS` over the sim's `MS_PER_TICK`, read from their sources,
+    /// so a segment moved here alone is red too.
+    #[test]
+    fn the_planned_segment_is_the_benchs_own() {
+        let root = crate::workspace_root().unwrap_or_else(|error| panic!("{error}"));
+        let constant = |file: &str, head: &str| -> u128 {
+            let text = std::fs::read_to_string(root.join(file))
+                .unwrap_or_else(|error| panic!("{file}: {error}"));
+            let line = text
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(head))
+                .unwrap_or_else(|| panic!("{file} defines no `{head}`"));
+            line.trim_end_matches(';')
+                .replace('_', "")
+                .parse()
+                .unwrap_or_else(|error| panic!("`{head}{line}`: {error}"))
+        };
+        let segment_ms = constant("crates/bench/src/g3.rs", "pub const G3_SEGMENT_MS: i32 = ");
+        let per_tick = constant(
+            "crates/sim/src/math/quantity.rs",
+            "pub const MS_PER_TICK: i32 = ",
+        );
+        assert_eq!(segment_ms, PLANNED_SEGMENT_TICKS * per_tick);
     }
 
     /// F7, the other side: this alarm's bars are the bench's constants, read
