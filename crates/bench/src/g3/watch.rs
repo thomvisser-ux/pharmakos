@@ -772,9 +772,11 @@ pub fn recompute_notice(report: &WatchReport, os: &str) -> String {
 
 /// E17's sightings notice: each seat's own peak beside the memories the sim
 /// counted it forgetting for room. A seat that forgot none held its true
-/// peak; a seat that forgot any held a peak the room cut short, and the
-/// notice says so in capitals; a seat with no count is said to have none,
-/// never read as zero. Pure.
+/// peak, provided the table refused no sighting over the segment (refusals
+/// are counted for all the seats together, so one refusal leaves every
+/// seat's peak unproven); a seat that forgot any held a peak the room cut
+/// short, and the notice says so in capitals; a seat with no count is said to
+/// have none, never read as zero. Pure.
 #[must_use]
 pub fn sightings_notice(report: &WatchReport, os: &str) -> String {
     let seats: Vec<String> = report
@@ -782,9 +784,13 @@ pub fn sightings_notice(report: &WatchReport, os: &str) -> String {
         .iter()
         .enumerate()
         .map(|(seat, (rows, tick))| match report.forgotten.get(seat) {
-            Some(0) => {
+            Some(0) if report.sightings_refused == 0 => {
                 format!("seat {seat} {rows} at tick {tick}, none forgotten for room: its true peak")
             }
+            Some(0) => format!(
+                "seat {seat} {rows} at tick {tick}, none forgotten for room, but SIGHTINGS WERE \
+                 REFUSED: its true peak is not known"
+            ),
             Some(forgotten) => format!(
                 "seat {seat} {rows} at tick {tick}, {forgotten} FORGOTTEN FOR ROOM: the room cut \
                  its peak short"
@@ -951,14 +957,26 @@ mod tests {
     fn each_seats_peak_and_forgotten_count_are_its_own() {
         let mut held = report(Vec::new(), vec![(64, 1), (10, 5), (63, 7)]);
         held.forgotten = vec![0, 3, 0];
-        held.sightings_refused = 2;
         assert_eq!(
             sightings_notice(&held, "linux"),
             "::notice title=G3' sightings::on linux, the most sighting rows each seat held after \
              a tick over the gate's segment (E17), and the memories the sim counted it forgetting \
              for room: seat 0 64 at tick 1, none forgotten for room: its true peak, seat 1 10 at \
              tick 5, 3 FORGOTTEN FOR ROOM: the room cut its peak short, seat 2 63 at tick 7, none \
-             forgotten for room: its true peak, against the table's 64 a seat; 2 sightings \
+             forgotten for room: its true peak, against the table's 64 a seat; 0 sightings \
+             refused outright"
+        );
+        // A refusal is counted for all the seats together, so with one no
+        // seat's peak is called its true peak, whatever it forgot.
+        held.sightings_refused = 2;
+        assert_eq!(
+            sightings_notice(&held, "linux"),
+            "::notice title=G3' sightings::on linux, the most sighting rows each seat held after \
+             a tick over the gate's segment (E17), and the memories the sim counted it forgetting \
+             for room: seat 0 64 at tick 1, none forgotten for room, but SIGHTINGS WERE REFUSED: \
+             its true peak is not known, seat 1 10 at tick 5, 3 FORGOTTEN FOR ROOM: the room cut \
+             its peak short, seat 2 63 at tick 7, none forgotten for room, but SIGHTINGS WERE \
+             REFUSED: its true peak is not known, against the table's 64 a seat; 2 sightings \
              refused outright"
         );
     }

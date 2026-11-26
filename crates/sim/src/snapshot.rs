@@ -1626,7 +1626,10 @@ impl Snapshot {
     /// is refused ([`SnapshotError::OverCeiling`]); one with fewer restores,
     /// and its derived indexes are rebuilt for the restored tables before
     /// anything is written, but a world built under another configuration
-    /// resumes with that configuration's ceiling, not the saved match's.
+    /// resumes with that configuration's ceiling, not the saved match's. What
+    /// the world keeps a seat (the decision figures, the sighting table's
+    /// rows, the counts of sightings forgotten) is sized again from the
+    /// snapshot's seats.
     ///
     /// The map is regenerated from [`Snapshot::match_seed`] under the receiving
     /// world's rules and the snapshot's own seat count, and the modified chunks

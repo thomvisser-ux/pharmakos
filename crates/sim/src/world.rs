@@ -876,9 +876,10 @@ impl DamageDrop {
     }
 }
 
-/// What the sighting table could not keep since the world was built: the
-/// memories each seat forgot for room, and the sightings refused outright.
-/// Diagnostic, never hashed, never snapshotted.
+/// What the sighting table could not keep since the world was built or last
+/// restored: the memories each seat forgot for room, and the sightings
+/// refused outright. Diagnostic, never hashed, never snapshotted, and begun
+/// again at a restore with a count for each seat the snapshot seats.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct SightingDrops {
     /// One count a seat, by seat id.
@@ -905,10 +906,11 @@ impl SightingDrops {
                     Some(count) => *count = count.saturating_add(1),
                     // The table refuses a sighting for a seat it holds no
                     // rows for before it forgets anything
-                    // (`SightingTable::see`), and it holds rows for the
-                    // world's seats, so no memory is forgotten for a seat
-                    // with no count here. Were one, it is counted with the
-                    // refusals, never left uncounted.
+                    // (`SightingTable::see`), and the counts are sized for
+                    // the seats the table holds rows for, at construction
+                    // and at every restore, so no memory is forgotten for a
+                    // seat with no count here. Were one, it is counted with
+                    // the refusals, never left uncounted.
                     None => self.refused = self.refused.saturating_add(1),
                 }
             }
@@ -2892,7 +2894,7 @@ impl World {
     }
 
     /// How many memories `seat` has forgotten for room since the world was
-    /// built: each a sighting of its own, its stalest, dropped so that a new
+    /// built or last restored: each a sighting of its own, its stalest, dropped so that a new
     /// one could be kept ([`sighting_room_of`]); `None` for a seat the world
     /// does not seat. Diagnostic.
     #[must_use]
@@ -2901,7 +2903,8 @@ impl World {
     }
 
     /// How many sightings the table refused outright since the world was
-    /// built, which its sizing rules out ([`crate::tables::Sighted::Refused`]).
+    /// built or last restored, which its sizing rules out
+    /// ([`crate::tables::Sighted::Refused`]).
     /// Diagnostic.
     #[must_use]
     pub const fn sightings_refused(&self) -> u64 {
@@ -7639,6 +7642,11 @@ impl World {
         self.wrecks = restored.wrecks;
         self.targets = restored.targets;
         self.sightings = restored.sightings;
+        // A count a seat of the restored match, none yet: as the decision
+        // figures above, sized from the seats the file seats, so a seat the
+        // restored table holds rows for has a count to file a forgotten
+        // memory under.
+        self.sighting_drops = SightingDrops::for_seats(self.sightings.seat_count());
         self.credit = restored.credit;
         self.shells = restored.shells;
         self.defend = restored.defend;
@@ -9936,7 +9944,7 @@ mod ids_tests {
         assert_eq!(reloaded.rules_hash(), committed.rules_hash());
         assert_eq!(
             format!("{:016x}", committed.rules_hash()),
-            "f223d48786bda2c8",
+            "641055eb0d38815a",
             "the committed table's rules hash is the one every golden names"
         );
     }
@@ -10270,6 +10278,61 @@ mod decision_visits {
             figures(runner.world()),
             vec![Some(Err(NoFigure::NoDecisionYet)); 2],
             "no decision since the restore"
+        );
+    }
+
+    /// The sighting table and the counts of what it forgot are sized from
+    /// the restored seats as the figures are (S3's `tune3`, review 2): a
+    /// two-seat match restored into a world built for three holds rows and a
+    /// count for two seats, and a sighting for the third is refused and
+    /// counted so, never forgotten uncounted.
+    #[test]
+    fn a_restore_sizes_the_sighting_counts_from_its_seats() {
+        let source = crate::runner::Runner::new(world()).unwrap_or_else(|error| panic!("{error}"));
+        let snapshot = source
+            .capture()
+            .unwrap_or_else(|error| panic!("a snapshot: {error:?}"));
+        let mut wider = World::new(&WorldConfig {
+            match_seed: crate::DETERMINISM_MATCH_SEED,
+            seats: 3,
+            rules: source.world().rules().clone(),
+            match_settings: crate::runner::MatchSettings::default(),
+        })
+        .unwrap_or_else(|error| panic!("a world: {error:?}"));
+        let seat = |raw: u8| crate::tables::SeatId::new(raw);
+        assert_eq!(
+            (0..4)
+                .map(|raw| wider.sightings_forgotten_by(seat(raw)))
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(0), Some(0), None]
+        );
+        snapshot
+            .restore_into(&mut wider)
+            .unwrap_or_else(|error| panic!("a restore: {error:?}"));
+        assert_eq!(
+            (
+                wider.sightings().seat_count(),
+                (0..4)
+                    .map(|raw| wider.sightings_forgotten_by(seat(raw)))
+                    .collect::<Vec<_>>()
+            ),
+            (2, vec![Some(0), Some(0), None, None])
+        );
+        let id = crate::knowledge::AssetId::of_unit(crate::tables::UnitId::new(7))
+            .unwrap_or_else(|error| panic!("an id: {error:?}"));
+        wider.see(
+            seat(2),
+            id,
+            seat(0),
+            crate::knowledge::AssetKind::Unit.id(),
+            crate::tables::NO_BLUEPRINT,
+            [Fx::ZERO; 3],
+            1,
+        );
+        assert_eq!(
+            (wider.sightings().len_of(seat(2)), wider.sightings_refused()),
+            (0, 1),
+            "a seat the restored match does not seat: refused, and counted"
         );
     }
 

@@ -28,13 +28,19 @@
 // (S2's plan, decision 12), so a scout walking to one looks at it from the
 // edge of its sight, and the cell is marked looked at
 // (`survey::seen_under_a_gun`). The walk itself is the router's and prices
-// no threat for a scout, so a scout sent to a cell on the far side of the
-// gun, or back from one, walks through it: six scouts are lost inside the
-// gun (ticks 10489, 11032, 14334, 17635, 20933 and 24247), the beacon fields
-// each again (decisions-log item 173 (2), "Refresh wins, accept losses"),
-// and the area is never reported surveyed in the match. Whether a scout
-// should route round a gun its seat sees is a question held for the owner
-// (S3's `tune3`, Q1b); this file pins the rules as they stand.
+// no threat for a scout, so a scout sent to a cell on the far side of a gun
+// walks through it. Pinned: six of seat 0's units are destroyed, each
+// credited to seat 1 on its tick (10489, 11032, 14334, 17635, 20933 and
+// 24247), and the area is never reported surveyed in the match. Read, not
+// pinned: they are the Survey post's scouts (the log shows seat 0 field a
+// unit within a few ticks of each loss, as the post replaces a scout), shot
+// by seat 1's core, the one weapon seat 1 holds; a
+// replay of the same staging in the sim alone found each inside the gun's
+// range, walking to a cell on its far side or back from one. The beacon
+// fields each again (decisions-log item 173 (2), "Refresh wins, accept
+// losses"). Whether a scout should route round a gun its seat sees is a
+// question held for the owner (S3's `tune3`, Q1b); this file pins the rules
+// as they stand.
 //
 // Until S3's `tune3` the probe area reached north to row 240. At a sight of
 // 28 the two scouts scan that larger area west along its northern rows

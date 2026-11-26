@@ -2358,10 +2358,9 @@ impl SightingTable {
                     // after it, never on it: `found` is where a key the
                     // table does not hold goes, and a row taken out before
                     // it moves that place down by one.
-                    let slot = if stalest < found {
-                        found.saturating_sub(1)
-                    } else {
-                        found
+                    let slot = match found.checked_sub(1) {
+                        Some(below) if stalest < found => below,
+                        _ => found,
                     };
                     (slot, Sighted::NewOverStalest)
                 } else {
@@ -2462,7 +2461,10 @@ impl SightingTable {
                 return Err(SightingsRefused::Unseated { seat: *seat });
             }
             run = match run {
-                Some((of, rows)) if of == *seat => Some((of, rows.saturating_add(1))),
+                // At most `count` rows, which fits a `u32` (checked above).
+                Some((of, rows)) if of == *seat => {
+                    Some((of, rows.checked_add(1).ok_or(SightingsRefused::Ragged)?))
+                }
                 ended => {
                     within(ended)?;
                     Some((*seat, 1))

@@ -889,7 +889,7 @@ fn the_survey_scenario_pins_its_beats() {
     assert_eq!(
         ticks_of("area_surveyed", 0),
         Vec::<u32>::new(),
-        "the area is never reported surveyed: the scouts sent to its last cells are lost at the gun"
+        "the area is never reported surveyed in the match"
     );
     let refreshed = ticks_of("sighting_refreshed", 0);
     let within = |from: u32, to: u32| {
@@ -907,9 +907,20 @@ fn the_survey_scenario_pins_its_beats() {
         (0, 9, 10),
         "no refresh is due in round 1, and each longer Push has its own: {refreshed:?}"
     );
+    let lost = vec![10_489, 11_032, 14_334, 17_635, 20_933, 24_247];
     assert_eq!(
         ticks_of("unit_destroyed", 0),
-        vec![10_489, 11_032, 14_334, 17_635, 20_933, 24_247],
-        "the scouts lost inside the core's gun, walking to a cell on its far side or back from one"
+        lost,
+        "six of seat 0's units are destroyed"
+    );
+    assert_eq!(
+        ticks_of("kill_credited", 1),
+        lost,
+        "each credited to seat 1 on its tick, and seat 1 is credited with nothing else"
+    );
+    assert_eq!(
+        ticks_of("unit_destroyed", 1),
+        Vec::<u32>::new(),
+        "seat 1 loses no unit"
     );
 }

@@ -1225,7 +1225,8 @@ const DROP_ROOM: usize = 3 * 64 * 4;
 /// each: the measurement's own room, as [`DROP_ROOM`] is, with every miss
 /// past it counted (`Scratch::survey_drops_unlogged`). A Push lists what its
 /// scouts can walk to, and a decision lists at most [`LIST_ROOM`] sightings a
-/// seat.
+/// seat. A Push that passes it has no whole memory to name a drop from, and
+/// names none from it after ([`Memory::missed`]).
 const SEAT_ROOM: usize = 3 * 64;
 
 /// What naming a Survey drop's reason remembers of the running Push, and the
@@ -1267,6 +1268,10 @@ pub(crate) struct Memory {
     /// (seat, the decision tick a scout of it was found dead on, where it
     /// stood at the decision before, its unit id).
     deaths: Reserved<(u8, u32, [Fx; 3], u32)>,
+    /// Whether a listing, a scout or a death of this Push found no room, so
+    /// what the memory says of the Push is no longer whole
+    /// ([`Memory::missed`]).
+    missed: bool,
 }
 
 impl Memory {
@@ -1278,6 +1283,7 @@ impl Memory {
             listed: Reserved::with_capacity(SEAT_ROOM),
             scouts: Reserved::with_capacity(SEAT_ROOM),
             deaths: Reserved::with_capacity(SEAT_ROOM),
+            missed: false,
         }
     }
 
@@ -1288,6 +1294,18 @@ impl Memory {
         self.listed.clear();
         self.scouts.clear();
         self.deaths.clear();
+        self.missed = false;
+    }
+
+    /// Whether a listing, a scout or a death of the running Push found no
+    /// room in the memory. A drop's reason is read from the listings and the
+    /// deaths ([`drop_reason`]), so once one is missing a reason read from
+    /// them could be the wrong one (a scout lost named out of reach): from
+    /// then on such a drop is counted unnamed
+    /// (`Scratch::survey_drops_unlogged`) for the rest of the Push, and no
+    /// reason is ever named that the memory cannot vouch for.
+    pub(crate) const fn missed(&self) -> bool {
+        self.missed
     }
 
     /// Keep the Push that began on tick `push`: a new Push forgets the last
@@ -1345,7 +1363,10 @@ impl Memory {
                 }
                 Ok(())
             }
-            Err(_) if self.listed.len() >= SEAT_ROOM => Err(Full),
+            Err(_) if self.listed.len() >= SEAT_ROOM => {
+                self.missed = true;
+                Err(Full)
+            }
             Err(at) => {
                 self.listed.insert(at, (seat, asset, tick, owner));
                 Ok(())
@@ -1391,6 +1412,7 @@ impl Memory {
             return Ok(());
         }
         if self.scouts.len() >= SEAT_ROOM {
+            self.missed = true;
             return Err(Full);
         }
         self.scouts.push((seat, unit, place));
@@ -1410,6 +1432,7 @@ impl Memory {
             return Ok(());
         };
         if self.deaths.len() >= SEAT_ROOM {
+            self.missed = true;
             return Err(Full);
         }
         self.deaths.push((seat, tick, place, unit));
@@ -2168,6 +2191,11 @@ fn insert<M: crate::seams::Meter + ?Sized>(
         match split_end.or(split_any).or(chained_end).or(chained_any) {
             Some(place) => lists.insert(p, place.row, place.after, meter),
             None if !connected => world.scratch_mut().survey_unserved.bump(),
+            // A memory that missed a listing or a death of this Push
+            // cannot say which of the three reasons it was: counted, unnamed.
+            None if due.needed && world.scratch_mut().survey.missed() => {
+                world.scratch_mut().survey_drops_unlogged.bump();
+            }
             None if due.needed => {
                 let reason = drop_reason(
                     world,
@@ -4179,5 +4207,54 @@ mod tests {
             1,
             "counted once, over several decisions"
         );
+    }
+
+    /// **No reason is named that the memory cannot vouch for** (S3's `tune3`,
+    /// review 2). The same sighting as
+    /// [`a_sighting_never_listed_and_beyond_reach_is_out_of_reach`], in a
+    /// Push whose memory has missed a listing for room: a listing that found
+    /// no room might have been this sighting's, and then "never listed"
+    /// would be false and the reason wrong, so the drop is counted unnamed.
+    /// A new Push's memory is whole again.
+    #[test]
+    fn a_memory_that_missed_a_listing_names_no_reason_from_it() {
+        let (mut runner, cx, cy) = late_in_the_push(1, 30);
+        let target = beacon_id(901);
+        sighted(&mut runner, AssetKind::Beacon, target, [cx + 150, cy], 160);
+        // Fill the listings past their room, as a Push of many more
+        // sightings than this would.
+        let memory = &mut runner.world_mut().scratch_mut().survey;
+        assert!(!memory.missed());
+        let mut refused = 0_u32;
+        for asset in 0..=u32::try_from(super::SEAT_ROOM).unwrap_or_else(|error| panic!("{error}")) {
+            if memory.listed(2, 5_000 + asset, 1, 1).is_err() {
+                refused += 1;
+            }
+        }
+        assert_eq!((refused, memory.missed()), (1, true), "one past the room");
+        for _ in 0..40 {
+            step(&mut runner);
+        }
+        let scratch = runner.world_mut().scratch_mut();
+        assert_eq!(
+            scratch
+                .survey_drops()
+                .iter()
+                .filter(|(seat, asset, _, _)| *seat == 0 && *asset == target.raw())
+                .count(),
+            0,
+            "no reason is named for it"
+        );
+        assert_eq!(scratch.survey_out_of_reach(), Ok(0));
+        assert!(
+            scratch
+                .survey_drops_unlogged()
+                .is_ok_and(|unnamed| unnamed > 1),
+            "the listing past the room and every unnamed drop are counted"
+        );
+        // A new Push begins a whole memory.
+        let memory = &mut runner.world_mut().scratch_mut().survey;
+        memory.begin(u32::MAX);
+        assert!(!memory.missed());
     }
 }

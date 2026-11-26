@@ -2,7 +2,7 @@
   "format": "pharmakos.save",
   "stamp": {
     "format_version": 4,
-    "rules_hash": "f223d48786bda2c8",
+    "rules_hash": "641055eb0d38815a",
     "verifier_version": "0.1.0-s3.9",
     "snapshot_version": 16
   },
@@ -30,7 +30,7 @@
         "playbook_jsonc": "// Walk east, then stand.\n{\"schema_version\": {\"major\": 1},\n \"meta\": {\"title\": \"East\", \"author_kind\": \"HUMAN\"},\n \"declarative\": {\"route\": [{\"label\": \"east\", \"move\": {\"to\": {\"voxel\": {\"x\": 362, \"y\": 22, \"z\": 36}}, \"pace\": \"DIRECT\"}, \"timeout_ms\": 60000, \"on_fail\": {\"action\": \"SKIP\"}}]},\n \"on_death\": {\"on_respawn\": \"CONTINUE\"},\n \"fallback\": {\"hold\": {\"at\": {\"beacon_anchor\": {\"safest\": {}}}}},\n \"kind\": \"PLAYBOOK\"}\n",
         "round": 1,
         "filed_by_the_gateway": false,
-        "report_hash": "4113475cdd6be20f",
+        "report_hash": "7324d26afd937470",
         "plan_fingerprint": "76debd683352224d"
       },
       "handles": [],
@@ -44,7 +44,7 @@
         "playbook_jsonc": "// Walk east, then stand.\n{\"schema_version\": {\"major\": 1},\n \"meta\": {\"title\": \"East\", \"author_kind\": \"HUMAN\"},\n \"declarative\": {\"route\": [{\"label\": \"wait0\", \"hold\": {\"ms\": 250}}, {\"label\": \"east\", \"move\": {\"to\": {\"voxel\": {\"x\": 360, \"y\": 357, \"z\": 29}}, \"pace\": \"DIRECT\"}, \"timeout_ms\": 60000, \"on_fail\": {\"action\": \"SKIP\"}}]},\n \"on_death\": {\"on_respawn\": \"CONTINUE\"},\n \"fallback\": {\"hold\": {\"at\": {\"beacon_anchor\": {\"safest\": {}}}}},\n \"kind\": \"PLAYBOOK\"}\n",
         "round": 1,
         "filed_by_the_gateway": false,
-        "report_hash": "95282292dcc566c5",
+        "report_hash": "8bb110d35f367697",
         "plan_fingerprint": "1831e30f46e07604"
       },
       "handles": [],

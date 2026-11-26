@@ -487,16 +487,18 @@ determinism chain did not move. Three things moved them:
   Over the smaller area, sixty coarse cells, the core is found at tick 3986 in
   round 1; the first `sighting_refreshed` is tick 6131; there are nineteen
   (none in round 1, nine in round 2, ten in round 3, the last at tick
-  24206); six scouts are lost inside the core's gun, walking to a cell on its
-  far side or back from one (ticks 10489, 11032, 14334, 17635, 20933 and
-  24247: decision 12 closes a place under a seen gun as a destination, and
-  the walk is the router's, which prices no threat for a scout), each fielded
-  again; and the area is never reported surveyed in the match (`tune3`'s Q1b,
-  held for the owner, is whether a scout should route round a seen gun).
-  Each of those figures is held by
+  24206); six of seat 0's units are destroyed, each credited to seat 1 on its
+  tick (10489, 11032, 14334, 17635, 20933 and 24247); and the area is never
+  reported surveyed in the match. Each of those figures is held by
   `expected.events.txt` and by `the_survey_scenario_pins_its_beats` in
   `crates/gamectl/tests/scenarios.rs`, which counts the refreshes of each
-  Push, since `event_fired` cannot.
+  Push, since `event_fired` cannot. What the log does not hold, read from a
+  replay of the same staging in the sim alone: the six are seat 0's scouts,
+  shot inside the range of seat 1's core while walking to a cell on the gun's
+  far side or back from one (decision 12 closes a place under a seen gun as a
+  destination, and the walk is the router's, which prices no threat for a
+  scout); `tune3`'s Q1b, held for the owner, is whether a scout should route
+  round a seen gun.
 
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen
