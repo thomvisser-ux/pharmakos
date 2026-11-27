@@ -11,9 +11,10 @@
 # own decode, and the camera opens on the core.
 #
 # Without `--shot=` it is a check: the core's ring is drawn at the radius each view sent, and
-# the scene quits 0. NOT YET COMPARED: `cargo xtask screenshot` renders only the shots `xtask`'s
-# SHOTS lists, and its row is an `xtask` change this lane does not own (S3's `cert3` adds it);
-# until then it is run by hand (godot/README.md):
+# the scene quits 0.
+# COMPARED: `cargo xtask screenshot` renders it and compares it with
+# `tests/golden/vista/expected.ring.png` (`xtask`'s SHOTS, from S3's `cert3`). It can also
+# be run by hand (godot/README.md):
 #
 #     godot --path godot --resolution 1280x720 -- --scene=res://scenes/ring_shot.tscn --shot=<png>
 #

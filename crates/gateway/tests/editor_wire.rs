@@ -671,7 +671,7 @@ fn a_typed_zero_retreat_is_written_and_said_as_retreat_off() {
     assert!(prose.contains("retreat off (0%)"), "{prose}");
 }
 
-/// Decisions-log item 184 (10): `scout_count` carries presence and Survey's
+/// Decisions-log item 184 (3): `scout_count` carries presence and Survey's
 /// probe areas can be cleared. Over the wire: a "0" typed at an edit row's
 /// unwritten `scout_count` writes the present 0, a composed `add` of
 /// `clear_probe_areas: true` goes through `patch_plan`, and `render_plan`
@@ -792,7 +792,7 @@ fn detail_after(rows: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Decisions-log item 184 (10): a 0 an edit row writes is the beacon's
+/// Decisions-log item 184 (3): a 0 an edit row writes is the beacon's
 /// setting, and `get_beacon` shows it, for each of the three numbers with
 /// presence (the review's mutant R12: the Survey row hiding a count of 0).
 #[test]

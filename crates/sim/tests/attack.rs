@@ -2613,6 +2613,7 @@ fn the_breach_search_holds_over_generated_walls() {
             seat(0),
             SealedWay::of(&world, start, goal).expect("a sealed way"),
         );
+        let expanded = scratch.expansions();
         let again = breach_search(
             &world,
             &mut scratch,
@@ -2622,6 +2623,20 @@ fn the_breach_search_holds_over_generated_walls() {
         assert_eq!(
             found, again,
             "case {case}: the search is a function of the world"
+        );
+        // The count the bench reads: the same on a reused scratch, more than
+        // nothing for a way that had to be searched, and past the bound
+        // exactly when the search was exhausted.
+        assert_eq!(
+            scratch.expansions(),
+            expanded,
+            "case {case}: the states expanded are a function of the world"
+        );
+        assert!(expanded > 0, "case {case}: a sealed way is searched");
+        assert_eq!(
+            expanded > pharmakos_sim::attack::BREACH_EXPANSIONS,
+            found == Err(pharmakos_sim::attack::BreachRefused::Exhausted),
+            "case {case}: {found:?} over {expanded} states"
         );
         answers = fold_answer(answers, case, found.as_ref().ok());
         match held_to_the_readings(&world, case, start, goal, &walker, found) {

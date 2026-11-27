@@ -1580,7 +1580,7 @@ fn commit_row_resolved(
             // written, so the rows they free are free for the Build list too:
             // the room test above counted them freed, and writing the targets
             // first would meet a table still holding them (a clear beside a
-            // Build list, decisions-log item 184 (10), found it). Removal
+            // Build list, decisions-log item 184 (3), found it). Removal
             // keeps the table's order, so the rows end where they did.
             if protected.is_some() {
                 world.clear_targets(beacon, TargetKind::Protected, units);
@@ -1628,7 +1628,7 @@ fn commit_row_resolved(
             }
             // A count past a byte is refused at the seal
             // (`PlanError::ScoutsOutOfRange`), so the row carries a byte; a
-            // written 0 stands the scouts down (decisions-log item 184 (10)).
+            // written 0 stands the scouts down (decisions-log item 184 (3)).
             if let Some(scouts) = scouts {
                 world.set_beacon_scouts(row, *scouts);
             }

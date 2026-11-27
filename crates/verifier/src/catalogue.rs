@@ -68,7 +68,7 @@
 //! ([`Emitter::Report`]). S3's `fpstream` (part 2) adds `E0030` (the
 //! verifier could not take a decoded playbook's plan fingerprint: its own
 //! fault, not the file's) at the end of the decode family. S3's `presence7`
-//! (decisions-log item 184 (10)) adds `E0515` (a list's `clear_*` flag beside
+//! (decisions-log item 184 (3)) adds `E0515` (a list's `clear_*` flag beside
 //! entries of its own list, or in settings that start from nothing) at the end
 //! of the settings family.
 //!
@@ -928,7 +928,7 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Structure),
     },
-    // S3's `presence7` (decisions-log item 184 (10)): a list's `clear_*` flag
+    // S3's `presence7` (decisions-log item 184 (3)): a list's `clear_*` flag
     // beside a non-empty list of its own, or in settings that start from
     // nothing, which the sim's compile refuses (`PlanError::ClearRefused`).
     Entry {

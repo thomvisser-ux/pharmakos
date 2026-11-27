@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Three number settings carry presence and four list settings can be
-//! cleared (decisions-log item 184 (10), the owner's "Fix all seven").
+//! cleared (decisions-log item 184 (3), the owner's "Fix all seven").
 //!
 //! Before, a `set_mandate_settings` row could not SET `scout_count`,
 //! `dig_max_depth` or `pillar_spacing` to 0, because proto3 read a written 0

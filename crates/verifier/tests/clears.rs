@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The verifier and the sim agree on every list's `clear_*` flag
-//! (decisions-log item 184 (10)): over every place a `MandateSettings` can
+//! (decisions-log item 184 (3)): over every place a `MandateSettings` can
 //! stand in a playbook, the four lists and every way a row can write a list,
 //! the verifier raises `E0515` exactly when the sim's compile refuses the
 //! playbook with `PlanError::ClearRefused`, and nothing that qualifies fails

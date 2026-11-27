@@ -12,9 +12,9 @@
 # each sentence with its chips drawn as links, the duration dim, and a conflict connector
 # joining the route's second step and the rule, as a W0702 row would name them.
 #
-# NOT YET COMPARED: `cargo xtask screenshot` renders the shots `xtask`'s SHOTS lists, and
-# adding this one is an `xtask` change this lane does not own; until a lane adds it, the scene
-# is run by hand (godot/README.md), and without `--shot=` it is a smoke test that draws the
+# COMPARED: `cargo xtask screenshot` renders it and compares it with
+# `tests/golden/vista/expected.rule_list.png` (`xtask`'s SHOTS, from S3's `cert3`). It can also
+# be run by hand (godot/README.md), and without `--shot=` it is a smoke test that draws the
 # list, checks each row's accessible name is its line, and quits.
 #
 #     godot --path godot --resolution 1280x720 -- --scene=res://scenes/rule_list_shot.tscn --shot=<png>

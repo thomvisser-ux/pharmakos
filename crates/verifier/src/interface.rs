@@ -415,9 +415,9 @@ fn each<T>(list: &[T]) -> u64 {
 /// by; a field with presence counts whenever it is written, its default
 /// included (S3's plan, task `con5b`, for `repair_threshold_pct`,
 /// `rebuild_destroyed` and `flee_on_threat`; decisions-log item 177 (3) for
-/// the Common row's `retreat_hp_pct`; item 184 (10) for `scout_count`,
+/// the Common row's `retreat_hp_pct`; item 184 (3) for `scout_count`,
 /// `dig_max_depth` and `pillar_spacing`). A list's `clear_*` flag, which
-/// empties the list (item 184 (10)), is one field when it is set. The mandate
+/// empties the list (item 184 (3)), is one field when it is set. The mandate
 /// *type* is free (spec section 5) and is never a field.
 ///
 /// **What "one field" means for a list (S1-23, ruled).** Spec section 5 writes
@@ -860,7 +860,7 @@ mod tests {
         assert_eq!(decoded.flee_on_threat, Some(false));
     }
 
-    /// Decisions-log item 184 (10): `scout_count`, `dig_max_depth` and
+    /// Decisions-log item 184 (3): `scout_count`, `dig_max_depth` and
     /// `pillar_spacing` carry presence, so a written 0 is one field and an
     /// omitted one none; each list's `clear_*` flag is one field when set, and
     /// none at `false`, which the canonical form never writes. The sim's

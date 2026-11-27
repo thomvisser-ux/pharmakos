@@ -554,7 +554,7 @@ pub enum Row {
         /// voxels and its footprint ([`crate::tables::ColumnBox`]), when the
         /// row names the list: `Some` replaces the beacon's list, and
         /// `Some` of an empty list is `clear_protected_areas`, which empties
-        /// it (decisions-log item 184 (10)); `None` leaves it alone.
+        /// it (decisions-log item 184 (3)); `None` leaves it alone.
         protected: Option<Vec<([i16; 3], ColumnBox)>>,
         /// The Survey mandate's probe areas, same shape and same reading
         /// (`clear_probe_areas` is `Some` of an empty list).
@@ -562,7 +562,7 @@ pub enum Row {
         /// The Survey mandate's scout count when the row names it, which a
         /// beacon's column holds as a byte; a larger count is refused at the
         /// seal. `Some(0)` stands the beacon's scouts down, and `None` writes
-        /// nothing (decisions-log item 184 (10): the field carries presence).
+        /// nothing (decisions-log item 184 (3): the field carries presence).
         scouts: Option<u8>,
         /// The Mine mandate's settings the row writes, each only when the row
         /// names it ([`crate::mining::MineEdit`]); `None` when the row carries
@@ -1962,7 +1962,7 @@ fn compile_wall_box(
 }
 
 /// Where a settings block stands, which says whether a list's `clear_*` flag
-/// has a list to empty (decisions-log item 184 (10)).
+/// has a list to empty (decisions-log item 184 (3)).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Carrier {
     /// A `place_beacon`'s initial settings or a `set_mandate` switch's: the
@@ -1977,7 +1977,7 @@ enum Carrier {
 /// beacon's), and `Some` of an empty list when its `clear` flag is set (which
 /// empties the beacon's). proto3 cannot tell an empty `repeated` field from
 /// one left out, so the flag is the only way to say "empty"
-/// (decisions-log item 184 (10)).
+/// (decisions-log item 184 (3)).
 ///
 /// # Errors
 ///
@@ -2336,7 +2336,7 @@ fn compile_feature_ref(
 /// when it is set to a non-default value, which is what proto3's canonical
 /// JSON keeps and so what the author wrote; a field with presence counts
 /// whenever it is written, its default included (`scout_count`,
-/// `dig_max_depth` and `pillar_spacing` from decisions-log item 184 (10)),
+/// `dig_max_depth` and `pillar_spacing` from decisions-log item 184 (3)),
 /// and a list's `clear_*` flag is one field when it is set. This is the
 /// verifier's `count`, field for field, so the Push charges a visit what the
 /// editor quotes.

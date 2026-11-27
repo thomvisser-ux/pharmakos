@@ -202,7 +202,7 @@ fn minus_zero_is_zero_in_every_integer_field() {
     let launch: AttackLaunch =
         json::decode(r#"{"segment_ms":-0}"#).expect("an optional int32 takes -0");
     assert_eq!(launch.segment_ms, Some(0));
-    // `dig_max_depth` has presence too (decisions-log item 184 (10)).
+    // `dig_max_depth` has presence too (decisions-log item 184 (3)).
     let mine: MineSettings =
         json::decode(r#"{"dig_max_depth":-0}"#).expect("an optional uint32 takes -0");
     assert_eq!(mine.dig_max_depth, Some(0));
