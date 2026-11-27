@@ -30,10 +30,12 @@ Read that file before your first edit. What follows is only the Claude Code-spec
    the spec (`docs/spec/pharmakos-spec-v0.6.html`) > `docs/design/co-design-gameplan-api.md`. See
    `docs/design/README.md`. The co-design doc predates the v1 simplification and still describes
    MCP tools, flags/branch/repeat, and a WASM planner — all of which are **not in v1**.
-3. **Confirm nobody else owns your crate.** At most four agents run at once (items 191 and 199), each in
+3. **Confirm nobody else owns your files.** At most four agents run at once (items 191 and 199), each in
    its own git worktree, and two agents never edit the same crate, except that two lanes whose
    briefs name disjoint files may, under AGENTS.md §6's conditions (item 227, which makes item 183's
-   word for S3 a standing rule).
+   word for S3 a standing rule). Ownership is by file: a lane owns the files its brief names, a
+   crate with one lane in it is owned whole, and a crate's shared files (`src/lib.rs`, its
+   `Cargo.toml`, a confinement test's `SOURCES` line) are sequenced.
 
 ## Stop and ask
 
@@ -71,11 +73,16 @@ at any time. The owner made the renewal effective on its word of 2026-10-14, so 
 between S1's stage demo and S1's close (item 141 (1)). On 2026-10-28, with S2's demo ready, the owner
 said the delegation runs into S3 (item 152), so it ran on through S3 to S3's stage demo. At S3's
 stage demo review, on 2026-11-27, the owner renewed it (decisions-log item 226 (4)), and it now
-runs on through S4 (the stage that follows S3, named by item 227) to S4's stage demo. Its terms
-change only by a widening the owner approves; the widenings approved so far are the owner's answers
-to points 30 and 33 of item 227: the reviews by risk of AGENTS.md §6, and "What is asked and what
-is told" below. At S4's stage demo the delegation returns to the owner, who says then whether it
-runs on into S5:
+runs on through S4 (the stage that follows S3, named by item 227) to S4's stage demo. That end
+point is the main session's reading of item 226 (4) after the re-cut (**decided; the owner can
+veto**): the three towers' close, which the owner plays (item 227, point 39), is a milestone review
+inside S4, at which the owner can revoke the delegation as at any time. Its terms change only by a
+widening the owner approves. The owner's answers to points 30 and 33 of item 227 (the reviews by
+risk of AGENTS.md §6, and "What is asked and what is told" below) are standing rules, not terms of
+the delegation, and do not lapse at a stage's demo: point 30's rules took effect when its AGENTS.md
+change merged, with no end, and point 33's line holds until the owner says otherwise (the main
+session's reading; the owner can veto). At S4's stage demo the delegation returns to the owner,
+who says then whether it runs on into S5:
 
 - The main assistant session may **merge** any PR while the delegation runs, whatever stage first
   planned its work (stage lanes, carries from earlier stages, docs and harness PRs, Dependabot's),
@@ -104,7 +111,8 @@ runs on into S5:
   reviews AGENTS.md §6 requires and the main session's reading of every PR before it merges, rather
   than by prompts. The ban above stays in force for any session or agent that touches a real seat.
 
-A standing limit on both, which is not a relaxation and does not expire at a stage's demo: the main
+A standing limit on both, which is not a relaxation and does not expire with the delegation
+(decisions-log item 168 (12)): the main
 session never merges, on its own word, a change to a point the decisions log reserves to the owner
 or to something the owner ruled; it keeps building everything else, holds that piece, and brings
 the questions to the owner as a batch (decisions-log item 168 (12)).
@@ -115,7 +123,11 @@ asking: keeping a tuning value as built; re-dating a marker; spec or AGENTS.md e
 the text match what was built or what the owner already ruled; and how a test or measurement is
 run. It always asks about anything that changes what the player experiences, scope, lore, a rule of
 the project, risk the owner would carry, and anything the owner ruled before. Item 168 (12)'s
-hold-and-batch, the paragraph above, still governs what is asked.
+hold-and-batch, the paragraph above, still governs what is asked. Where the two meet, on the main
+session's reading of point 33 (the owner can veto; held for the owner's confirmation, item 227):
+the four told kinds are told even where a marker or a sentence names the owner, because the owner
+approved them as told in point 33; a change to what the owner ruled, or to a value the owner
+reserved, is never one of them and stays under item 168 (12).
 
 ## Commands
 
@@ -179,7 +191,7 @@ or runs tests on a host other than the three CI triples it refuses, with the row
 
 ## When you finish
 
-- Say which crates you touched, so the next agent can pick a disjoint set.
+- Say which crates and files you touched, so the next agent can pick a disjoint set (by file where a crate is shared).
 - List every `PLACEHOLDER` you left and who has to resolve it.
 - Conventional-commit subject, `Signed-off-by:` as the last line, SPDX header on every new file
   (AGENTS.md §8).
