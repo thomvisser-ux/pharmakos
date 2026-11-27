@@ -297,13 +297,16 @@ const KEPT_FALLBACKS: &[(&str, &str, usize, &str)] = &[
         "src/price.rs",
         "let step: Step = pharmakos_proto::json::decode_json(step).ok()?;",
         1,
-        "a step is the operator's own JSON, built from a declared template or its own          builders; one that is no `gp.v1.Step` has no price, and the candidate it prices is not          weighed (`candidates.rs`' `priced`)",
+        "a step is the operator's own JSON, built from a declared template or its own \
+         builders; one that is no `gp.v1.Step` has no price, and the candidate it prices is not \
+         weighed (`candidates.rs`' `priced`)",
     ),
     (
         "src/price.rs",
         "i64::try_from(list.len()).ok()",
         1,
-        "a list in one decoded step is far shorter than `i64::MAX`; a count that did not fit          would leave the step unpriced, not priced at a default",
+        "a list in one decoded step is far shorter than `i64::MAX`; a count that did not fit \
+         would leave the step unpriced, not priced at a default",
     ),
     (
         "src/candidates.rs",
