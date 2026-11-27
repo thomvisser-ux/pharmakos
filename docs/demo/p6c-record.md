@@ -106,7 +106,7 @@ Backspace. Three `set_value_text` calls, each `ok`.
 | Typing clause | three of three chips read the new number |
 | A miss? (a time over its limit, or any control the card needs that did not work as it says) | **no**, on the main session's reading: both times are within their limits, and every control the card needs worked; the card's wording of the vent menu's row order, not the control, differed, so no miss (the owner can veto) |
 | Driven by | the main AI session, by computer control (AI-driven; not a person's time) |
-| The owner's ruling at S3's stage demo review: does S3 close on this evidence? | |
+| The owner's ruling at S3's stage demo review: does S3 close on this evidence? | **yes**: "Close S3 on it (Recommended)", the owner's answer of 2026-11-27 (decisions-log item 226 (2)) |
 
 A miss opens a short added lane before S3 closes; the clause is read again on that lane's build, and
 AGENTS.md section 10 item 6 is not met until then (section 5.3). The AI review is not independent review.

@@ -648,7 +648,8 @@ request and the owner reviews the stage demo.
   (decisions-log item 183), for the rest of S3 two lanes may work in one crate at the same time
   when their briefs name disjoint files. Under that word, each lane's brief lists its files, a file
   both need is sequenced as above, merges stay one at a time, and the later lane takes `main` by a
-  signed merge and re-runs the full check. A task granted a *named place* in a
+  signed merge and re-runs the full check. That word ran to S3's close (decisions-log item 226),
+  and whether it is renewed is the owner's. A task granted a *named place* in a
   crate it does not own (a module, or a few named lines) is granted that crate's confinement-test
   line with it wherever the test lists the crate's sources by name, and the grant says so:
   `every_module_is_checked` in `crates/gamectl/tests/confinement.rs` fails on any `mod name;` that a

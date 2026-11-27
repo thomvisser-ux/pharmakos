@@ -32,7 +32,8 @@ Read that file before your first edit. What follows is only the Claude Code-spec
    MCP tools, flags/branch/repeat, and a WASM planner — all of which are **not in v1**.
 3. **Confirm nobody else owns your crate.** At most four agents run at once (items 191 and 199), each in
    its own git worktree, and two agents never edit the same crate, except that, by the owner's word (item 183), for the rest of S3
-   two lanes whose briefs name disjoint files may (AGENTS.md §6).
+   two lanes whose briefs name disjoint files may (AGENTS.md §6); that word ran to S3's close
+   (item 226), and whether it is renewed is the owner's.
 
 ## Stop and ask
 
@@ -69,8 +70,9 @@ on it was green) to S2's stage demo. They are revoked by the owner's word
 at any time. The owner made the renewal effective on its word of 2026-10-14, so there is no gap
 between S1's stage demo and S1's close (item 141 (1)). On 2026-10-28, with S2's demo ready, the owner
 said the delegation runs into S3 (item 152), so it ran on through S3 to S3's stage demo. At S3's
-stage demo review, on 2026-11-27, the owner renewed it (item 226 (4)), so it now runs on, on the same
-terms, through the stage that follows S3 to that stage's demo. At that stage's demo the delegation
+stage demo review, on 2026-11-27, the owner renewed it (decisions-log item 226 (4)); its terms are
+unchanged until the owner approves a widening, and it now runs on through the stage that follows S3
+to that stage's demo. At that stage's demo the delegation
 returns to the owner, who says then whether it runs on into the stage after it:
 
 - The main assistant session may **merge** any PR while the delegation runs, whatever stage first
