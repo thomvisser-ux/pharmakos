@@ -7,8 +7,44 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 Each release's notes name its tag and commit, and are the section below headed with the version
 string the zips carry at that commit (`xtask/src/package.rs`'s `VERSION`;
-`.github/workflows/release.yml`). The development tags, `v0.1.0-dev.<n>`, share the section
-below until the wk-35.5 release.
+`.github/workflows/release.yml`). Versions are stage-based before 1.0, the minor number the stage
+(decisions-log item 228): `0.N.0` closes stage N, `0.N.P` is a fix to it, `0.N.0-mK` is a
+milestone build inside stage N, and `1.0.0` is v1. The development tags `v0.1.0-dev.<n>` share the
+`0.1.0-dev+skeleton` section.
+
+## 0.3.0
+
+S3, authoring: the build S3's close carries (decisions-log items 224 to 226). It keeps everything
+the section below lists, and S2's destruction and combat, which this file did not list at the
+time.
+
+- **Probation**, the lobby's one-click match: the owner against Easy on seed 20, the 3 / 5 / 8
+  ladder, untimed Lulls, and a **Playtest mode** checkbox, off by default.
+- The wizard's **guided first pick**: one template marked as the place to start, with the
+  gateway's reason, and the other templates still listed.
+- The **size meter** under the editor: the playbook's size units against the budget of 128.
+- The **rule list**: each rule a sentence with chips you click and type into, the verdict on the
+  row; the W0702 connector between a rule that can never fire and the rule that shadows it, and
+  dragging to reorder; a condition built through the picker (family, predicate, parameters); and
+  an entry the seat cannot use yet greyed with a lock and its reason.
+- **Save and Load** of JSONC playbooks, comments kept; a file holding a construct outside the v1
+  vocabulary (a `set_flag`, say) is refused on Load with its code and pointer.
+- **The first licence**: running Generators on two vents at a settlement awards the Resonance
+  Spire's licence, with a recap line and the first-licence memo. A `toward` step places a
+  stepping-stone beacon toward a named vent. The Spire is queued at a beacon (one per beacon, the
+  verifier refusing a second), widens the core's sphere when it is built, and the sphere returns
+  to its base radius if the Spire is lost.
+- The Ledger's **memos**: a power shortfall, the first licence and the commander's first death.
+- The **playtest survey** and **Export playtest bundle**: the survey's three questions, the
+  metrics and the client's diagnostics log in one file you send by hand, with no playbook, draft,
+  notebook or cache file and no network.
+- Pathing in the sim and the travel estimate the verifier and the editor show, certified within
+  their gates; the verifier's FULL inspection within its time at the size budget.
+- A Survey's scout count, a Mine's dig depth and its pillar spacing can be set to 0 by an edit
+  row, and `clear_protected_areas`, `clear_protect`, `clear_avoid_areas` and
+  `clear_probe_areas` empty a beacon's lists. **A hand-written file that wrote one of those
+  three numbers as 0 in an edit row now sets it to 0** (before, the 0 did nothing), and in a new
+  beacon's or a switched mandate's settings the 0 is now charged one field.
 
 ## 0.1.0-dev+skeleton
 
@@ -39,11 +75,3 @@ S1, the economy, added to the same development builds:
 - The verifier's money and time checks: the `$` and `kW` projection, the interface times, and a
   lower bound on walking against the coming segment.
 - A first Lull of 10 minutes and later ones of 5, and Easy playing under the new rules.
-
-S3, authoring, so far in the same development builds:
-
-- A Survey's scout count, a Mine's dig depth and its pillar spacing can be set to 0 by an edit
-  row, and `clear_protected_areas`, `clear_protect`, `clear_avoid_areas` and
-  `clear_probe_areas` empty a beacon's lists. **A hand-written file that wrote one of those
-  three numbers as 0 in an edit row now sets it to 0** (before, the 0 did nothing), and in a new
-  beacon's or a switched mandate's settings the 0 is now charged one field.

@@ -713,8 +713,8 @@ fn the_export_ships_the_smoke_check_and_no_other_test_file() {
         "binary_format/embed_pck=false",
         "binary_format/architecture=\"x86_64\"",
         "application/modify_resources=true",
-        "application/product_version=\"0.1.0-dev+skeleton\"",
-        "application/file_version=\"0.1.0.0\"",
+        "application/product_version=\"0.3.0\"",
+        "application/file_version=\"0.3.0.0\"",
     ] {
         assert!(
             presets.contains(setting),

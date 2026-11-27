@@ -21,8 +21,10 @@
 #
 # A workflow_dispatch with `tag` and an optional `sha` (default: main's head) runs steps 1 to
 # 5 as a dry run and prints what it would upload; the create step's only condition is a
-# pushed `v*` tag. The skeleton's tags are `v0.1.0-dev.<n>` from 1, and the gate's is
-# `v0.1.0` (item 117 (13)).
+# pushed `v*` tag. The skeleton's tags were `v0.1.0-dev.<n>` from 1 (item 117 (13)). From
+# item 228 versions are stage-based before 1.0, the minor number the stage: `v0.N.0` closes
+# stage N, `v0.N.P` is a fix, `v0.N.0-m<K>` a milestone build inside stage N (a prerelease,
+# by its suffix), and `v1.0.0` is v1; the main session pushes a tag on the owner's ruling.
 #
 # Security: no permissions at the top, `contents: write` and `actions: read` on the one job;
 # no checkout and no third-party action; the tag and every input reach the shell only

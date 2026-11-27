@@ -67,9 +67,15 @@ use crate::{
     walk, zip,
 };
 
-/// The version string of every zip until the wk-35.5 release (item 117 (2)).
-/// `[workspace.package] version` stays `0.0.0`.
-pub(crate) const VERSION: &str = "0.1.0-dev+skeleton";
+/// The version string every zip carries: the one source (decisions-log item 142).
+/// Stage-based before 1.0, the minor number the stage (item 228): `0.N.0` closes
+/// stage N, `0.N.P` is a fix, `0.N.0-mK` a milestone build inside stage N, and
+/// `1.0.0` is v1. `release.yml` reads this line by its exact shape, takes the
+/// notes from `CHANGELOG.md`'s section headed with it, and for a tag with no `-`
+/// suffix requires it to be the tag's version. The Windows preset in
+/// `godot/export_presets.cfg` repeats it, which a test below holds.
+/// `[workspace.package] version` stays `0.0.0` (item 117 (2); item 228).
+pub(crate) const VERSION: &str = "0.3.0";
 
 /// The folder the zip holds, and the zip's only top-level entry.
 const FOLDER: &str = "Pharmakos";
@@ -2194,6 +2200,52 @@ SPDX-License-Identifier = \"MIT\"
         let path = Path::new("packaging/README.windows.txt.in");
         assert!(unfilled(path, "version 0.1 for you@example").is_ok());
         assert!(unfilled(path, "floor @GLIBC@ here").is_err());
+    }
+
+    /// `VERSION` is the one source (items 142 and 228), and every copy of it
+    /// follows: `CHANGELOG.md` has the section `release.yml` takes the notes
+    /// from, the Windows preset stamps it as the product version with its
+    /// numeric core as the file version, and the constant's line keeps the
+    /// exact shape `release.yml`'s `sed` reads it by.
+    #[test]
+    fn the_version_string_is_one_source_and_its_copies_follow_it() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let changelog = fs::read_to_string(root.join(CHANGELOG_FILE)).expect("the changelog");
+        let heading = format!("## {VERSION}");
+        assert!(
+            changelog.lines().any(|line| line == heading),
+            "CHANGELOG.md has no `{heading}` section for release.yml's notes"
+        );
+        let core = VERSION.split(['-', '+']).next().expect("a version");
+        let parts: Vec<&str> = core.split('.').collect();
+        assert!(
+            parts.len() == 3
+                && parts
+                    .iter()
+                    .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit())),
+            "VERSION's core is <major>.<minor>.<patch>: {VERSION}"
+        );
+        let presets = fs::read_to_string(root.join(GODOT_PROJECT_DIR).join("export_presets.cfg"))
+            .expect("the export presets");
+        for setting in [
+            format!("application/product_version=\"{VERSION}\""),
+            format!("application/file_version=\"{core}.0\""),
+        ] {
+            assert!(
+                presets.lines().any(|line| line == setting),
+                "export_presets.cfg lacks `{setting}`"
+            );
+        }
+        let source = fs::read_to_string(root.join("xtask/src/package.rs")).expect("this file");
+        let line = format!("pub(crate) const VERSION: &str = \"{VERSION}\";");
+        assert_eq!(
+            source
+                .lines()
+                .filter(|candidate| *candidate == line)
+                .count(),
+            1,
+            "release.yml reads VERSION from exactly one line shaped `{line}`"
+        );
     }
 
     #[test]

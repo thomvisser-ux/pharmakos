@@ -20,7 +20,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.0"                # stays 0.0.0 until the wk-35.5 v0.1 gate (item 117 (2)); v1 is wk 63.5
+version = "0.0.0"                # stays 0.0.0: a build's version is xtask/src/package.rs's VERSION, the one source (items 117 (2), 142 and 228)
 edition = "2024"
 rust-version = "1.98"            # the pin's minor (S1-01, discharged by S2's `msrv`); see clippy.toml
 license = "GPL-3.0-or-later"     # crates/proto overrides this with MIT OR Apache-2.0
