@@ -132,10 +132,15 @@ If `cargo xtask ci` is green locally and a `cargo xtask ci` leg is red in CI, th
 `xtask` bug worth fixing, not a reason to run a different command. It is complete for harness parts
 1 and 2 (`xtask/src/main.rs`, sixteen steps, covering AGENTS.md §9 items 1–10) and green; a failure
 in it is a bug to fix rather than a reason to reach for another command. `cargo xtask ci-scope`,
-`cargo xtask perf-alarms`, `cargo xtask g3-budget` and `cargo xtask package` sit outside the step
-table; `perf-alarms [mesher|p1|g3|allocations]` never fails on a measurement (an unknown alarm name is a usage error), `g3-budget` (G3′-real's CI alarm, in the
-`g3 budget (ubuntu-24.04)` job, not required) **can** fail, at the gate's numbers doubled or on a
-missing verdict, and `scripts/merge-train.sh` stops on it, and `package` runs alone (AGENTS.md §9). `cargo xtask placeholders` lists the register and never
+`cargo xtask perf-alarms`, `cargo xtask g3-budget`, `cargo xtask p3-budget`, `cargo xtask
+p1-budget` and `cargo xtask package` sit outside the step table;
+`perf-alarms [mesher|p1|p1-cap|p1-decision|p1-kinds|p3|g3|g3-watch|allocations]` never fails on a
+measurement (an unknown alarm name is a usage error), `g3-budget` (G3′-real's CI alarm, in the
+`g3 budget (ubuntu-24.04)` job, not required) and `p3-budget` and `p1-budget` (the authoring alarms,
+in the `authoring budgets (ubuntu-24.04)` job, not required) **can** fail, each at its gates'
+numbers doubled or on a missing verdict, and `scripts/merge-train.sh` stops on them; every
+certifying run sets `PHARMAKOS_BENCH_CERTIFY=1`, or each line it prints carries the "NOT A
+CERTIFYING FIGURE" banner (decisions-log item 218); and `package` runs alone (AGENTS.md §9). `cargo xtask placeholders` lists the register and never
 fails; its `--check` is one of the sixteen steps, `placeholders`, run after `reuse`, and fails on any
 marker off the register's grammar (decisions-log item 137).
 
