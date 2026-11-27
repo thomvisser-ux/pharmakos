@@ -39,9 +39,11 @@
 //!   and its counts of the searches it refused (`World::attack_counts`). The
 //!   probe's ways are the bench's, not the ones the sim's raids ask (a lead's
 //!   column to its aim, which the sim reads from state the bench does not
-//!   restate). The expansions a search spends are not read: `breach_search`
-//!   keeps them in a local and returns none, so the figure needs a sim API
-//!   this lane may not add.
+//!   restate). The expansions a search spends are the sim's own count,
+//!   `BreachScratch::expansions`, read after each run: the most one search
+//!   spent and their sum, against the search's bound. The count is a pure
+//!   function of the world and the way, so a search whose runs disagree on
+//!   it is a drift, and the probe fails.
 //!
 //! No gate reads these figures: an alarm's lines are published and gated
 //! nowhere, and a certifying run's are recorded as evidence for E15 and E17
@@ -54,7 +56,9 @@ use pharmakos_gateway::fog::Blind;
 use pharmakos_gateway::surface::Surface;
 use pharmakos_gateway::token::Token;
 use pharmakos_proto::json::{self, Json};
-use pharmakos_sim::attack::{BreachScratch, SealedWay, breach_search};
+use pharmakos_sim::attack::{
+    BREACH_EXPANSIONS, BreachRefused, BreachScratch, SealedWay, breach_search,
+};
 use pharmakos_sim::seams::MandateKind;
 use pharmakos_sim::sight::SensorKind;
 use pharmakos_sim::tables::SeatId;
@@ -317,10 +321,87 @@ pub struct BreachProbe {
     pub slowest_ns: u128,
     /// The searches' times summed, fastest of each one's runs.
     pub total_ns: u128,
+    /// The most states one search expanded (`BreachScratch::expansions`).
+    pub most_expansions: u32,
+    /// The states the searches expanded, summed.
+    pub total_expansions: u64,
     /// The sim's own Attack rows launched at the probe.
     pub launched: u64,
     /// Of them, the rows holding a breach the sim's own search found.
     pub holding_breach: u64,
+}
+
+/// One breach search, run [`BREACH_RUNS`] times.
+struct TimedSearch {
+    /// The fastest run, in nanoseconds.
+    ns: u128,
+    /// What the search answered.
+    outcome: Result<(), BreachRefused>,
+    /// The states it expanded (`BreachScratch::expansions`), the same on every run.
+    expanded: u32,
+}
+
+/// Run one breach search [`BREACH_RUNS`] times, read only, keeping the fastest
+/// run's time. The search is a pure function of the world and the way, so
+/// runs that disagree on the expansions they spent are refused, in words.
+fn time_search(
+    world: &World,
+    scratch: &mut BreachScratch,
+    seat: SeatId,
+    way: SealedWay,
+) -> Result<TimedSearch, String> {
+    let mut kept: Option<TimedSearch> = None;
+    for _ in 0..BREACH_RUNS {
+        let started = Instant::now();
+        let found = breach_search(world, scratch, seat, way);
+        let ns = started.elapsed().as_nanos();
+        let expanded = scratch.expansions();
+        let outcome = found.map(|_| ());
+        kept = Some(match kept {
+            Some(before) if before.expanded != expanded => {
+                return Err(format!(
+                    "a breach search expanded {expanded} states on one run and {} on another",
+                    before.expanded
+                ));
+            }
+            Some(before) => TimedSearch {
+                ns: before.ns.min(ns),
+                outcome,
+                expanded,
+            },
+            None => TimedSearch {
+                ns,
+                outcome,
+                expanded,
+            },
+        });
+    }
+    kept.ok_or_else(|| "a breach search ran no time".to_owned())
+}
+
+impl BreachProbe {
+    /// Book one timed search: its outcome, its time and its expansions.
+    fn book(&mut self, search: &TimedSearch) -> Result<(), Error> {
+        let tally = match search.outcome {
+            Ok(()) => &mut self.found,
+            Err(BreachRefused::Exhausted) => &mut self.exhausted,
+            Err(BreachRefused::NoWay) => &mut self.no_way,
+        };
+        *tally = tally
+            .checked_add(1)
+            .ok_or(Error::Overflow("the breach outcomes"))?;
+        self.slowest_ns = self.slowest_ns.max(search.ns);
+        self.total_ns = self
+            .total_ns
+            .checked_add(search.ns)
+            .ok_or(Error::Overflow("the breach searches' time"))?;
+        self.most_expansions = self.most_expansions.max(search.expanded);
+        self.total_expansions = self
+            .total_expansions
+            .checked_add(u64::from(search.expanded))
+            .ok_or(Error::Overflow("the breach searches' expansions"))?;
+        Ok(())
+    }
 }
 
 /// Probe the breach search on `world`, read only.
@@ -395,33 +476,9 @@ fn probe_breach(world: &World, minute: u64) -> Result<BreachProbe, Error> {
                 .sealed
                 .checked_add(1)
                 .ok_or(Error::Overflow("sealed ways"))?;
-            let mut best: Option<u128> = None;
-            let mut outcome = None;
-            for _ in 0..BREACH_RUNS {
-                let started = Instant::now();
-                let found = breach_search(world, &mut scratch, SeatId::new(*seat), way);
-                let ns = started.elapsed().as_nanos();
-                best = Some(match best {
-                    Some(kept) => kept.min(ns),
-                    None => ns,
-                });
-                outcome = Some(found.map(|_| ()));
-            }
-            let ns = best.ok_or_else(|| Error::Empty("a breach search run no time".to_owned()))?;
-            let tally = match outcome {
-                Some(Ok(())) => &mut probe.found,
-                Some(Err(pharmakos_sim::attack::BreachRefused::Exhausted)) => &mut probe.exhausted,
-                Some(Err(pharmakos_sim::attack::BreachRefused::NoWay)) => &mut probe.no_way,
-                None => return Err(Error::Empty("a breach search ran no time".to_owned())),
-            };
-            *tally = tally
-                .checked_add(1)
-                .ok_or(Error::Overflow("the breach outcomes"))?;
-            probe.slowest_ns = probe.slowest_ns.max(ns);
-            probe.total_ns = probe
-                .total_ns
-                .checked_add(ns)
-                .ok_or(Error::Overflow("the breach searches' time"))?;
+            let search = time_search(world, &mut scratch, SeatId::new(*seat), way)
+                .map_err(|why| Error::Drift(format!("from {at:?} to {core:?}: {why}")))?;
+            probe.book(&search)?;
         }
     }
     Ok(probe)
@@ -828,7 +885,8 @@ pub fn breach_notice(report: &WatchReport, os: &str) -> String {
         .map(|probe| {
             format!(
                 "minute {}: {} ways, {} sealed, {} found, {} exhausted, {} no way, slowest {} ns, \
-                 {} ns in all; the sim's own {} launched attacks, {} holding a breach",
+                 {} ns in all, the most one search expanded {} states, {} in all; the sim's own \
+                 {} launched attacks, {} holding a breach",
                 probe.minute,
                 probe.ways,
                 probe.sealed,
@@ -837,6 +895,8 @@ pub fn breach_notice(report: &WatchReport, os: &str) -> String {
                 probe.no_way,
                 probe.slowest_ns,
                 probe.total_ns,
+                probe.most_expansions,
+                probe.total_expansions,
                 probe.launched,
                 probe.holding_breach,
             )
@@ -847,10 +907,10 @@ pub fn breach_notice(report: &WatchReport, os: &str) -> String {
          world, not the sim's own searches: once a minute, from every live Attack beacon's \
          column to every enemy core's own column (a goal no walker stands on, so the oracle \
          calls such a way sealed and the search runs to a breach, to its expansions' bound or \
-         to no way), the search run read-only and timed, fastest of {BREACH_RUNS}: {}; the \
-         sim's own refused searches over the segment: {} spent their expansions, {} found no \
-         way. Expansions per search are not read: the search keeps them in a local and returns \
-         none",
+         to no way), the search run read-only and timed, fastest of {BREACH_RUNS}, its \
+         expansions the sim's own count against a bound of {BREACH_EXPANSIONS} (a search that \
+         spends the bound reads one past it): {}; the sim's own refused searches over the \
+         segment: {} spent their expansions, {} found no way",
         minutes.join("; "),
         report.sim_refused.0,
         report.sim_refused.1,
@@ -929,6 +989,36 @@ mod tests {
             sim_refused: (0, 0),
             chain_digest: 4,
         }
+    }
+
+    /// The breach notice names each minute's expansions, the most one search
+    /// spent and their sum, and the bound they are read against.
+    #[test]
+    fn the_breach_notice_names_the_expansions_and_their_bound() {
+        let mut watched = report(Vec::new(), Vec::new());
+        watched.breach = vec![BreachProbe {
+            minute: 1,
+            ways: 2,
+            sealed: 2,
+            exhausted: 1,
+            no_way: 1,
+            slowest_ns: 9,
+            total_ns: 12,
+            most_expansions: 16_385,
+            total_expansions: 16_390,
+            ..BreachProbe::default()
+        }];
+        let line = breach_notice(&watched, "linux");
+        assert!(
+            line.contains(
+                "minute 1: 2 ways, 2 sealed, 0 found, 1 exhausted, 1 no way, slowest 9 ns, 12 ns \
+                 in all, the most one search expanded 16385 states, 16390 in all; the sim's own 0 \
+                 launched attacks, 0 holding a breach"
+            ),
+            "{line}"
+        );
+        assert!(line.contains("against a bound of 16384"), "{line}");
+        assert!(!line.contains("not read"), "{line}");
     }
 
     /// C5: listings compared page count by page count, the entity count beside

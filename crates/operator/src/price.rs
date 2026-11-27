@@ -315,7 +315,7 @@ mod tests {
         );
     }
 
-    /// Decisions-log item 184 (10): `scout_count`, `dig_max_depth` and
+    /// Decisions-log item 184 (3): `scout_count`, `dig_max_depth` and
     /// `pillar_spacing` carry presence, so a written 0 is one field, as the
     /// verifier's `count` and the sim's compile charge it; a list's `clear_*`
     /// flag is one field when set and none at `false`.

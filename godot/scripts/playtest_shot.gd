@@ -8,10 +8,10 @@
 #
 # Without `--shot=` it is a check: the button switched the bridge's recorder on, the line and the
 # survey are shown, an answer past its cap refuses the export in the string table's words until
-# the answer changes, the check button switched off clears the recorder, and the scene quits 0. NOT
-# YET COMPARED: `cargo xtask screenshot` renders only the shots `xtask`'s SHOTS lists, and its row
-# is S3's `cert3`'s first commit (proposed golden `tests/golden/vista/expected.playtest.png`);
-# until then it is run by hand (godot/README.md):
+# the answer changes, the check button switched off clears the recorder, and the scene quits 0.
+# COMPARED: `cargo xtask screenshot` renders it and compares it with
+# `tests/golden/vista/expected.playtest.png` (`xtask`'s SHOTS, from S3's `cert3`). It can also
+# be run by hand (godot/README.md):
 #
 #     godot --path godot --resolution 1280x720 -- --scene=res://scenes/playtest_shot.tscn --shot=<png>
 #

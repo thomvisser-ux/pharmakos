@@ -600,7 +600,7 @@ fn settings_tally(settings: &MandateSettings, prices: &Prices) -> Result<Orders,
             Ok(ordered(total))
         }
         // An omitted count orders no scout, and neither does a written 0
-        // (decisions-log item 184 (10)).
+        // (decisions-log item 184 (3)).
         Some(mandate_settings::Mandate::Survey(survey)) => match survey.scout_count {
             Some(scouts) => Ok(ordered(Tally::times(prices.scout(), scouts))),
             None => Ok(ordered(Tally::ZERO)),

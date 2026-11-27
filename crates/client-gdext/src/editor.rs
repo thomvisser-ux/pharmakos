@@ -5215,10 +5215,10 @@ const fn check_of(sent: &Sent) -> Option<(Check, u64)> {
 }
 
 /// The ghost's verdict from the patched draft's QUICK report: illegal when an error points
-/// into the placed step; not known when none does but the report's `left_out` field names an
-/// error code (the placed step is the route's last, so its own error is the first a cap leaves
-/// out); legal otherwise. A code's severity is its listed rows': an error code is left out of
-/// only once the cap's number of it are listed. `step` is the placed step's index in the
+/// into the placed step; not known when none does but the report's `left_out` field holds a
+/// gap whose own severity is an error (the placed step is the route's last, so its own error
+/// is the first a cap leaves out); legal otherwise. A gap's severity is the report's typed
+/// field, not read from the listed rows. `step` is the placed step's index in the
 /// route; when the route could not be read, the report's own `qualifies` is the verdict.
 fn placement_verdict(report: &VerifyReport, step: Option<usize>) -> (GhostState, String) {
     let inside = |path: &str| match step {

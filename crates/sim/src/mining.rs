@@ -183,7 +183,7 @@ pub struct MineSettings {
 /// names (`set_mandate_settings`: "changes settings within the current
 /// mandate"). Three of the four carry presence on the wire (`flee_on_threat`
 /// from S3's plan, task `con5b`; `dig_max_depth` and `pillar_spacing` from
-/// decisions-log item 184 (10)), so a written 0 or `false` is an edit like
+/// decisions-log item 184 (3)), so a written 0 or `false` is an edit like
 /// any other; `seam_choice` is a proto3 enum whose zero names no choice, so
 /// its zero is a setting the row is silent about. A mandate switch and a new
 /// beacon start from [`MineSettings::default`] first, which is how an
