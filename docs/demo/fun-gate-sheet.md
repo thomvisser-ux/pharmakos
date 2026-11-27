@@ -13,7 +13,9 @@ file.
 
 1. Extract the whole zip into a folder of its own, and keep its files together.
 2. Run `Pharmakos.exe` in that folder. The build is unsigned: if Windows says "Windows protected your
-   PC", choose "More info", then "Run anyway". The zip's `README.txt` says the same.
+   PC", choose "More info", then "Run anyway". The zip's `README.txt` says the same. On Linux, run
+   `./Pharmakos.x86_64` in that folder; if your archive tool dropped the executable bits, run
+   `chmod +x Pharmakos.x86_64 gamectl` there first.
 
 ## Turn on Playtest mode
 

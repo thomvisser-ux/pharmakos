@@ -70,7 +70,7 @@ the rule forbids that).
 | Time (ticks / 20, seconds) | 1923 / 20 = **96.15 s** |
 | Verdict at the submit (qualifies; codes shown) | "Submitted. This is now your sealed order." and "Checked at submission - Ready to seal." (qualifies; before the submit "Full check - Ready to seal."; "10 of 128 size units"; the rows under Checks were notes: I0003 rows with their "Fix: Write the default out" buttons, and the walking-time note) |
 | Each refusal seen, with its words | none: all thirteen `patch_plan` calls and the one `submit_plan` answered `ok`; no step was refused |
-| Each control that did not work as the card says | none. Every menu opened on its first click and every row took. One difference from the card's wording, not a failure: a plain click on the vent opened the two-row menu with "Place beacon covering this vent" FIRST and "Place beacon covering the nearest vent you can cover" SECOND (the card names them in the other order); the driver took the second row, as the card asks. |
+| Each control that did not work as the card says | none. Every menu opened on its first click and every row took. One difference from the card's wording, not a failure: a plain click on the vent opened the two-row menu with "Place beacon covering this vent" FIRST and "Place beacon covering the nearest vent you can cover" SECOND (the card names them in the other order); the driver took the second row, as the card asks, and the control worked. The main session's reading: the card's wording, not the control, differed, so no miss; the owner can veto. |
 | The sealed route against the card: ten steps, each of the card's kind in its order (read from `seats\0\sealed\1.jsonc`) | ten steps, each of the card's kind in its order, read from `seats\0\sealed\1.jsonc`: (1) `place_1` place_beacon at voxel (201, 25, 28); (2) `go_1` move to voxel (200, 15, 28); (3) `visit_1` interface `b_00`, `set_priority` HIGH; (4) `go_2` move to voxel (186, 13, 28); (5) `go_3` move to `b_00`'s anchor; (6) `place_2` place_beacon at voxel (172, 25, 28); (7) `go_4` move to voxel (199, 32, 28); (8) `place_3` place_beacon at `covering` `vent` `{"rank":"NEAREST","coverage":"UNCOVERED"}`; (9) `go_5` move to `b_00`'s anchor; (10) `visit_2` interface `b_00`, `set_priority` NORMAL. After the submit the driver pressed "Ready - end the Lull" so that the sealed file was written; the strip then read "The playbook of seat 0 was sealed: 10 route steps." |
 | Step 8: the description, or a vent's name (say which) | **the description** (`covering` the NEAREST UNCOVERED vent), not a vent's name |
 | Within 5 minutes? | **yes** (96.15 s) |
@@ -104,7 +104,7 @@ Backspace. Three `set_value_text` calls, each `ok`.
 | Template timing | 85.0 s of 120 s: within |
 | Scratch timing | 96.15 s of 300 s: within |
 | Typing clause | three of three chips read the new number |
-| A miss? (a time over its limit, or any control the card needs that did not work as it says) | **no**: both times are within their limits and every control the card needs worked as it says |
+| A miss? (a time over its limit, or any control the card needs that did not work as it says) | **no**, on the main session's reading: both times are within their limits, and every control the card needs worked; the card's wording of the vent menu's row order, not the control, differed, so no miss (the owner can veto) |
 | Driven by | the main AI session, by computer control (AI-driven; not a person's time) |
 | The owner's ruling at S3's stage demo review: does S3 close on this evidence? | |
 

@@ -21,12 +21,14 @@ break and indent; the rest of it is tests. Since that is a change to the sim and
 certifying runs were retaken on it by the main session**; their record is decisions-log item 225. The
 main session re-reads this sheet after any later merge. The words in quotation marks are the product's own: the gateway's from
 `crates/gateway/src/strings.rs` and `crates/plan-core/src/strings.rs`, the verifier's from its
-catalogue, the lobby's and the editor's from `godot/scripts/strings.gd`. A number in angle brackets,
+catalogue, the built-in operator's from `crates/operator/src/` (the guided pick's reason, which the
+gateway serves), the lobby's and the editor's from `godot/scripts/strings.gd`. A number in angle brackets,
 such as `<N>`, is one the match decides and this sheet cannot know. Row IDs such as S3-33 are rows of
 the PLACEHOLDER register, `docs/placeholders.md`.
 
 **The P6 gate, in one line:** template 85.0 s of 120, scratch 96.15 s of 300, typing clause met (three
-of three chips), no miss (`docs/demo/p6c-record.md`), AI-driven by the main session, **not a person's
+of three chips), no miss on the main session's reading (the card's wording of the vent menu's row
+order differed, not the control; the owner can veto; `docs/demo/p6c-record.md`), AI-driven by the main session, **not a person's
 time**; the owner rules at this review whether S3 closes on it (section 5.3's closing rule).
 
 **How the steps were checked.** The main session cannot watch the vista, so every match step below
@@ -80,8 +82,8 @@ detached checkout of that commit:
   `a8aa864a`, run 46036162824, green (not downloaded for this sheet).
 
 The zip holds `Pharmakos.exe`, `gamectl.exe`, the client library, `library/` (five templates),
-`rules/` (revision 8, `rules_hash` `641055eb0d38815a`) and `README.txt`, whose first lines are the
-note on unsigned builds ("THIS BUILD IS UNSIGNED", then "More info", then "Run anyway"). It holds no
+`rules/` (revision 8, `rules_hash` `641055eb0d38815a`) and `README.txt`, whose first lines after the
+version and build lines are the note on unsigned builds ("THIS BUILD IS UNSIGNED", then "More info", then "Run anyway"). It holds no
 scenario files.
 
 **Unzipping and folders.** Extract the whole zip into a folder of its own. The match cache is under
@@ -178,7 +180,8 @@ Each round's text, as the round probes sealed it:
    - Proof: `crates/gateway/tests/probation.rs` `the_first_lull_marks_the_advisors_start_with_its_reason`
      and `the_guided_template_list_answers_its_golden` (`tests/golden/gateway/list_templates_guided/`),
      run for this sheet, "ok"; Easy names Hold & Build whenever the library lists it
-     (`crates/operator/src/easy.rs`, `START_HERE_WHY`). The meter on screen: by hand only.
+     (`crates/operator/src/easy.rs`), and the reason is the operator's `START_HERE_WHY`, defined in
+     `crates/operator/src/compose.rs` and served through the gateway. The meter on screen: by hand only.
 3. **The rule list (step 2).** Each rule is a sentence with chips.
    - Click the repair threshold's chip (50) and type 60, then press "Set this value": the gateway's
      verdict comes back on the row.
@@ -237,8 +240,9 @@ Each round's text, as the round probes sealed it:
      Resonance Spire.", and the first-licence memo: "Notice of licence. You ran Generators on two
      vents at settlement. You may now queue a Resonance Spire at any of your beacons."
    - Headless, round 2: `beacon_placed` for seat 0 at 4591 and 5316, `structure_completed` at 6133,
-     and `licence_awarded` for seat 0 at 9600, the settlement (round probe 2); in every probe the
-     licence came at round 2's settlement.
+     and `licence_awarded` for seat 0 at 9600, the settlement (round probe 2); in every probe whose text holds the stone
+     (round 2's text onward) the licence came at round 2's settlement; round probe 1, whose text holds no
+     stone, placed one beacon (tick 716) and earned none, as its text requires.
    - Proof: `scenarios/s3/resonance-spire` and `toward-stepping-stone` (`licence_awarded` for seat 0
      by tick 9600), replayed by the package, "ok"; `crates/gateway/tests/probation.rs`
      `a_licence_earned_at_a_settlement_reaches_the_recap_the_feed_the_briefing_and_the_vocabulary`,
@@ -250,7 +254,8 @@ no price moved. So section 1.1's sum stands: three beacons ($180), two Generator
 drone at each ($40), $380, against the $200 start, one settlement and the starting drone's two $64
 loads. Measured headless on `641055eb0d38815a`: the loads land at ticks 1489 and 3023 in round 1 (and
 the third at 3799, in round 2), as `resonance-spire`'s committed event log has them, and every probe
-placed all three and was awarded the licence at round 2's settlement. The probes see no treasury
+whose text holds the stone (round 2's text onward) placed all three and was awarded the licence at
+round 2's settlement; round probe 1, whose text holds no stone, placed one beacon and earned none. The probes see no treasury
 figure, so the margin itself ("$43 to $58 is left") is the plan's arithmetic, not a measurement.
 
 ## Round 3: the Spire
@@ -398,7 +403,7 @@ identical on both systems and to the morning's.
 | --- | --- | --- | --- | --- |
 | G2's repath p99 | ≤ 5 ms | 0.937 / 0.898 / 0.885 ms | 0.916 / 0.910 / 0.900 ms | **0.910 ms**, WSL2 |
 | P3's one-leg estimate p99 | ≤ 1 ms | 0.492 / 0.493 / 0.485 ms | 0.485 / 0.485 / 0.488 ms | **0.492 ms**, Windows |
-| P3's accuracy (real commanders, three seeds) | p90 ≤ 15 %, never optimistic | from the serve min 0, p90 0, max 0 per mille; from the send min −48, p50 −2 per mille (the notices are the morning's, line for line) | identical | **0 per mille from the serve, never optimistic** |
+| P3's accuracy (real commanders, three seeds) | p90 ≤ 15 %, never optimistic | from the serve min 0, p90 0, max 0 per mille; from the send min −48, p50 −2 per mille (the same 38 lines as the morning's, in the order the harness's threads printed them) | identical | **0 per mille from the serve, never optimistic** |
 | P1 QUICK p99 at 128, worst shape (`route_guards_24_node`), canonical bytes | ≤ 5 ms | 3.341 / 3.339 / 3.319 ms | 3.132 / 3.214 / 3.113 ms | **3.339 ms**, Windows (33 % under) |
 | P1 FULL p99 at 128, worst shape (`handlers_24_node`) | ≤ 50 ms | 7.607 / 7.769 / 7.651 ms | 7.340 / 7.335 / 7.553 ms | **7.651 ms**, Windows |
 | The editor's end-to-end wait (`verify_plan`, the worse of QUICK and FULL, worst shape `handlers_24_node`; item 162 (1)) | ≤ 50 ms | 8.492 / 8.509 / 8.439 ms | 8.140 / 8.121 / 8.068 ms | **8.492 ms**, Windows |
@@ -451,9 +456,9 @@ G4's chains on Windows, Ubuntu and macOS and their cross-OS compare. Its "nightl
 enabled)" job was skipped, so the arms run on the schedule (`NIGHTLY_SCENARIOS_ENABLED` is set). Each
 arm's line reads "20 seed(s) played, the arm the sole winner of <N>":
 
-| Arm | Sole wins vs Easy | Band (an alarm above 65 %) | Acknowledged |
+| Arm | Sole wins vs Easy | Band (an alarm above 65 %) | Its acknowledgement |
 |---|---|---|---|
-| Rusher | 16 of 20 (80 %) | **over**: the job warned "rusher won 80% of seeds, above the 65% alarm band — open a tuning task" | open, under the owner's answers 22 and 26 (items 213 and 217) |
+| Rusher | 16 of 20 (80 %) | **over**: the job warned "rusher won 80% of seeds, above the 65% alarm band — open a tuning task" | open; its acknowledgement for S3's close is asked in question 3 (answer 26 shows it as measured; that answer 22 lifts its tuning is the main session's reading, item 213 (4), with no confirmation by the owner recorded) |
 | Hunter | 9 of 20 (45 %) | within | — |
 | Turtle | 0 of 20 | within | — |
 
@@ -473,11 +478,42 @@ found the same three. These are shown as measured, not tuned and not explained a
 6. **Round 4's Build target** replaces round 3's Spire row, since a Spire standing at the core makes
    the row E0513.
 7. **The Spire's destruction is staged** (step 9), as section 1.1 says.
+8. **No balance check re-run on S3's rules** stands behind section 1.1's "the balance check re-run on
+   S3's rules" beside the demo, or behind risk R11's measure: `tune3` made none, under answer 22's
+   pause (item 219 (10); the pause's scope is the main session's reading, item 213 (4)).
+9. **The nightly's 10,000 fuzzed playbooks** are from run 45997206064 on `7a604e22`, not from the
+   final tree, since no nightly has run on `a8aa864a` or later; #255 and #258 changed no verifier
+   source.
+
+## The owner's earlier answers, restated
+
+Each is an answer the owner gave before this review, restated so the demo can be read against it,
+with the owner's label quoted whole as the decisions log has it. Nothing here asks it again.
+
+1. **"Never later than promised" is counted from when the route is served** (item 169 (3) (a): "From
+   when the route is served").
+2. **`estimate_route` refuses with `PHASE_CLOSED` outside a Lull** (item 169 (3) (b): "Refuse in a
+   Push").
+3. **`get_map_summary` omits `travel_ms` and `reachable` outside a Lull** (item 169 (3) (c): "Omit them
+   in a Push"; item 170). The editor asks only in a Lull, so nothing in this demo changes with 2 or 3.
+4. **The patch undo's form** is the gateway's own, not an RFC 6902 patch, and the forward patch refuses
+   an unknown member (item 168 (3): "Keep as built", which ratifies the main session's item 167 (4)).
+5. **Probation's seed stays 20** though seed 13 also passes (item 168 (4): "Keep 20"; item 169 (7)).
+6. **`charge_lost`** is announced for every loss of a carried charge and not refunded (item 168 (6):
+   "Keep: announce, no refund").
+7. **A lead perched on an enemy wall with no walkable way off** ends `Sealed` (item 168 (7): "No, ends
+   sealed").
+8. **Spec section 6's Survey sentence** binds the refresh of sightings already held, a first discovery
+   may take longer, and the scout count stays 2 until S5 (item 173 (1): "Refresh only (Recommended)",
+   2026-11-22; `spec3`'s #258 wrote it into the spec's sections 6 and 14 as Decided).
+9. **Decision 14**, the view's delta mode (S2-12) and the recompute key (S1-34): measured in S3 and
+   built at S7 (item 154 (4): "Take all as recommended"). `cert3`'s watch measured them and both
+   markers read S7; nothing about it is open.
 
 ## Told to the owner, not asked
 
-Each is reported as the decisions log states it, with its item. Each is the main session's call, which
-the owner can veto, unless it quotes the owner.
+Each is the main session's call, reported as the decisions log states it, with its item. **The owner
+can veto each.**
 
 1. **Easy's changed seals** (item 169 (11) (a), (12) (a)): "where it sealed the safe playbook, it
    seals Hold & Build on those seats, and its hold went from 9,900 to 16,100 ms in `against-easy`."
@@ -487,53 +523,38 @@ the owner can veto, unless it quotes the owner.
    row past the sim's `i32` of milliseconds (`RulesError::RowPastTheSim`), "which only a table the
    committed rules do not match meets": the zip's rules do not meet them.
 3. **The allowance and the repath cap** (item 169 (12) (c)): the allowance per re-ask is 20 ticks
-   (1 s) at the committed cap of 16 (20, 39, 77, 154 and 308 at caps 16, 8, 4, 2 and 1 at two seats);
-   "never later than promised" is counted from when the route is served (item 169 (3) (a)).
-4. **`estimate_route` refuses with `PHASE_CLOSED` outside a Lull** ("Refuse in a Push", item 169 (3)
-   (b)), and **`get_map_summary` omits `travel_ms` and `reachable` outside a Lull** ("Omit them in a
-   Push", item 169 (3) (c); item 170). The editor asks only in a Lull, so nothing in this demo changes.
-5. **Probation's seed stays 20** though seed 13 also passes ("Keep 20", item 168 (4); item 169 (7)).
-6. **`charge_lost`** is announced for every loss of a carried charge and not refunded ("Keep", item
-   168 (6)); a lead perched on an enemy wall with no way off ends `Sealed` (item 168 (7)).
-7. **The patch undo's form** is the gateway's own, not an RFC 6902 patch ("Keep as built", items 167
-   (4) and 168 (3)), and the forward patch refuses an unknown member.
-8. **Spec section 6's Survey sentence** binds the refresh of sightings already held, not a first
-   discovery ("Refresh only (Recommended)", 2026-11-22, item 173 (1)); the scout count stays 2 until
-   S5.
-9. **Items 166 (1) to (6)** (the repair at the end of the Voxels phase, one door for every snapshot,
+   (1 s) at the committed cap of 16 (20, 39, 77, 154 and 308 at caps 16, 8, 4, 2 and 1 at two seats).
+4. **Items 166 (1) to (6)** (the repair at the end of the Voxels phase, one door for every snapshot,
    the breach search on the walkers' moves, `charge_lost`): none changes what this demo shows, since
    no breach and no charge happens in it.
-10. **The certifying poll's 16 false marks** (item 225 (4)). On Windows the during-run poll marked the
-    runs' own processes FOREIGN in 16 runs, exactly those whose command starts with `env
-    PHARMAKOS_BENCH_CERTIFY=1 cargo ...` (under MSYS that chain leaves cargo's parent process id
-    pointing at an exited process, so the tree walk could not tie it to the wrapper). Checked
-    mechanically: every sample in those 16 lists exactly one `cargo.exe` and the record's own test
-    binary, with the same process ids through the run, and nothing else. The wrapper is fixed and a
-    rehearsal reads "no foreign build process seen". Decided: the 16 runs stand and are not retaken;
-    the owner can veto.
-11. **The theme sentence** (item 224 (13)). On the owner's request of 2026-11-27 ("in addition to
-    referencing metasploit as inspiration, include 'cairn' as the latest generation of pharmakos"),
-    the spec gains, in `spec3`'s pull request: "The inspiration is Metasploit, the framework a defender
-    tests with and an attacker breaks in with; its latest generation is Cairn, an open-source engine
-    that coordinates AI agents toward a goal and is used for autonomous penetration testing by both."
-    The owner can veto the wording.
-12. **Where P6 was read, and the lost clicks** (`docs/demo/p6c-record.md`). The template timing was read
-    on the primary monitor, under the driving application's own always-on-top window, which lay over
-    the game's right panel and which the driver's screenshots do not show: three clicks on "Submit"
-    never reached the game (the game's `--log-input` has no line for them, and `WindowFromPoint` at the
-    button named that window). The scratch timing and the typing clause were read with the game's
-    window moved to the second monitor, and every click registered first time. Decided: the template
-    timing stands as read, 85.0 s, the lost clicks included (about 45 s of it); it was not re-run for
-    a better number, because the rule reads the gate once; the owner can veto. The P6 practice notes'
-    "a click was swallowed" lines have the same cause. The lesson for the next hand read: move the
-    game away from the driving application's window first.
-13. **`spec3`'s #258 changes AGENTS.md**: section 3 rule 4's `ed3a` and `ed3b` clauses (citing item
-    224 (14), which records #166 and #188), section 7's playtest sentence, and section 10's ladder
-    wording ("on the owner's go verdict"). It merges under the owner's delegation (item 152; CLAUDE.md,
-    "Permissions") after two adversarial reviews. Each change makes the file agree with an owner's
-    ruling (item 154 (3); decision 11) or with what merged lanes built, and none changes a rule; items
-    183 (3), 217 (7) (b) and 223 (11) took the same reading. The reading is the main session's; the
-    owner can veto it.
+5. **The certifying poll's 16 false marks** (item 225 (4)). On Windows the during-run poll marked the
+   runs' own processes FOREIGN in 16 runs, exactly those whose command starts with `env
+   PHARMAKOS_BENCH_CERTIFY=1 cargo ...` (under MSYS that chain leaves cargo's parent process id
+   pointing at an exited process, so the tree walk could not tie it to the wrapper). Checked
+   mechanically: every sample in those 16 lists exactly one `cargo.exe` and the record's own test
+   binary, with the same process ids through the run. At each of its samples (3 s in, then every
+   15 s) nothing else appeared; the idle checks before and after each run cover the ends; a build
+   that started and ended between two samples would not show. The wrapper is fixed and a rehearsal
+   reads "no foreign build process seen". Decided: the 16 runs stand and are not retaken; the owner
+   can veto.
+6. **Where P6 was read, and the lost clicks** (`docs/demo/p6c-record.md`). The template timing was
+   read on the primary monitor, under the driving application's own always-on-top window, which lay
+   over the game's right panel and which the driver's screenshots do not show: three clicks on
+   "Submit" never reached the game (the game's `--log-input` has no line for them, and
+   `WindowFromPoint` at the button named that window); a fourth, sent after an Escape key press,
+   submitted. The scratch timing and the typing clause were read with the game's window moved to the
+   second monitor, and every click registered first time. Decided: the template timing stands as
+   read, 85.0 s, the lost clicks included (about 45 s of it); it was not re-run for a better number,
+   because the rule reads the gate once; the owner can veto. The P6 practice notes' "a click was
+   swallowed" lines have the same cause. The lesson for the next hand read: move the game away from
+   the driving application's window first.
+7. **`spec3`'s #258 changes AGENTS.md**: section 3 rule 4's `ed3a` and `ed3b` clauses (citing item
+   224 (14), which records #166 and #188), section 7's playtest sentence, and section 10's ladder
+   wording ("on the owner's go verdict"). It merged (`8da088de`) under the owner's delegation (item
+   152; CLAUDE.md, "Permissions") after two adversarial reviews. Each change makes the file agree
+   with an owner's ruling (item 154 (3); decision 11) or with what merged lanes built, and none
+   changes a rule; items 183 (3), 217 (7) (b) and 223 (11) took the same reading. The reading is the
+   main session's; the owner can veto it.
 
 ## Owner rulings at the demo
 
@@ -547,27 +568,28 @@ its class. None is answered here.
    250, `structures.resonance_spire`, `verifier.handler_cooldown_min_ms` 5000, `max_fires_max` 8,
    `notebook_max_chars` 4000, `verifier.reach_memory_ms` 180000, `verifier.size_budget_units` 128 and
    `locomotion.climb_surcharge` 4). No row has a balance report line: `tune3` made no re-run (item 219
-   (10)). *Recommendation:* keep revision 8 for S3, and make the balance re-read the first tuning task
-   once the pause lifts, as answer 26 says. *Class:* operator: priority.
+   (10)). *Recommendation:* keep revision 8 for S3. *Class:* operator: priority.
 2. **The Spire's numbers, its licence's rule and the charge's damage** ($120, 500 HP, 3 kW, the
    sphere 24 to 36 by `structures.resonance_spire_sphere_bonus_voxels` 12, a 60 s build;
    `licences.resonance_vents` 2, Generators on two vents at a settlement; `combat.charge_damage_hp`
    60), not read against a duel report (item 219 (10)); each is a Tuning row, the owner's at S3's
    demo, and `spec3`'s #258 states the first two as today's Tuning rows, not as Decided (the size
-   budget's 128 is question 1's).
-   *Recommendation:* keep for S3. *Class:* operator: intent.
+   budget's 128 is question 1's). *Recommendation:* keep for S3. *Class:* operator: intent.
 3. **The nightly bands and Easy's raids, as measured** (answer 26): the Rusher 16 of 20, over its
-   band; Easy raiding in 3 of 60 matches, all against the Turtle, none before round 5.
-   *Recommendation:* acknowledge the Rusher's band as open for S3's close (AGENTS.md section 10 item
-   5), with both first after S3 as answer 26 says. *Class:* operator: risk.
+   band; Easy raiding in 3 of 60 matches, all against the Turtle, none before round 5. The Rusher's
+   band is open; whether it is acknowledged for S3's close is asked here. *Recommendation:*
+   acknowledge it as open for S3's close (AGENTS.md section 10 item 5), with both first after S3 as
+   answer 26 says. *Class:* operator: risk.
 4. **R11 and Easy's Survey post.** No raid reached a newcomer-shaped seat in a Probation-length match:
    on seed 20 Easy first sights the owner's beacons in round 5, and in the nightly its earliest launch
    is round 5. *Recommendation:* keep the Survey post (no revert by cut 3's unit). *Class:* operator:
    intent.
 5. **Step 4's brownout.** No route fits the beat. *Recommendation:* keep the beat staged for S3 and
    leave decision 4's trigger as it is. *Class:* operator: intent.
-6. **The money on seed 20.** Every probe earned the licence at round 2's settlement on the final
-   rules. *Recommendation:* no cure; seed 20 stands. *Class:* operator: intent.
+6. **The money on seed 20.** Every probe whose text holds the stone (round 2's text onward) earned the
+   licence at round 2's settlement on the final rules; round probe 1, whose text holds no stone,
+   placed one beacon and earned none, as its text requires. *Recommendation:* no cure; seed 20
+   stands. *Class:* operator: intent.
 7. **The memo copy as first written** (register S3-33, "owner, at S3's demo"). *Recommendation:* keep
    it for S3, polished at S6 (spec section 19). *Class:* operator: intent.
 8. **The other markers that read "owner, at S3's demo"**: S3-27 (one voxel as a structure's look),
@@ -577,46 +599,51 @@ its class. None is answered here.
    totals, the balance check's seeds and flags, and the repair threshold of 50.
    *Recommendation:* keep each at its value and re-date it to the stage the re-strategy interview
    plans. *Class:* operator: priority.
-9. **`BENCH_SEED` (S1-49, "at S3's exit") and `BREACH_EXPANSIONS` (S3-32)**, with item 223 (7)'s
-   figures: E12's rule within on all six readings (101.4, 97.0, 107.3, 98.3, 99.8, 100.1 %); the
-   breach probe's searches spent the bound (16,385 states) in minutes 1 and 2, the slowest 9.807 ms,
-   and G3′ with raids certified at 12.109 ms. *Recommendation:* keep `BENCH_SEED` and keep 16,384.
-   *Class:* operator: intent.
+9. **`BENCH_SEED` (S1-49, "at S3's exit") and `BREACH_EXPANSIONS` (S3-32)**, on item 225 (7)'s
+   figures: E12's rule within on all six readings (110.7, 100.0 and 100.0 % on Windows; 99.8, 99.8
+   and 100.6 % on WSL2); the breach probe's searches spent the bound (16,385 states) in minutes 1 and
+   2, the slowest 9,774,600 and 8,988,500 ns on Windows and 9,833,100 and 9,243,997 ns on WSL2; G3′
+   with raids certified at 12.084 ms (`budget_128`) and 12.071 ms (`full_eval`). The morning's, item
+   223 (7), beside them: E12 101.4, 97.0, 107.3, 98.3, 99.8 and 100.1 %; the slowest search 9.807 ms;
+   G3′ with raids 12.109 ms. *Recommendation:* keep `BENCH_SEED` and keep 16,384. *Class:* operator:
+   intent.
 10. **R13, the systems' gap**, open for the owner (items 223 (3), (6) and 225 (6)): on both records the
     gap is small and of mixed sign, every figure set by the slower system (the morning's largest P1
     QUICK's 8 %; the afternoon's QUICK 3.339 ms Windows against 3.132 ms WSL2), the 2026-11-26 tail a
-    diagnosis and not a proof; the lesson, "restart Windows first". *Recommendation:* keep R13 open until a later certifying night
-    reads clean after a restart, and fix the during-run poll first (item 223 (4)). *Class:* operator:
-    risk.
-11. **P6** (the line at the top), and the spec's section 16 P6 row is then amended to the ruling
-    (`spec3`'s #258 leaves that row unamended for this reason). *Recommendation:* the record shows no
-    miss, so close S3 on it, stated as AI-driven and not a person's time. *Class:* operator: policy.
-12. **Decision 16, `authoring budgets (ubuntu-24.04)` as a required check.** It has passed on six
-    push runs of `main` in a row since `cert3` merged, seven with `a8aa864a` (`9893031e`, `23a76625`,
-    `4ce711cc`, `95cd0301`, `7a604e22`, `5e62ba7`, `a8aa864a`). *Recommendation:* make it required. *Class:* operator: policy.
-13. **Decision 14.** The view's delta mode (S2-12) and the recompute key (S1-34) are measured by
-    `cert3`'s watch and their markers already read S7. *Recommendation:* confirm S7. *Class:* operator:
-    priority.
-14. **Decision 10.** *Recommendation:* cut `v0.1.0-rc.1` from the commit this review closes S3 on.
-    *Class:* operator: policy.
-15. **Whether the merge delegation runs on into S4** (item 152 (2), decision 19; CLAUDE.md: it returns
+    diagnosis and not a proof; the lessons, "restart Windows first", and, from item 225 (4), rehearse
+    a changed wrapper before a certifying leg (the poll and its wrapper were fixed and rehearsed).
+    *Recommendation:* keep R13 open until a later certifying night reads clean after a restart.
+    *Class:* operator: risk.
+11. **P6** (the line at the top): does S3 close on the record, and the spec's section 16 P6 row is then
+    amended to the ruling (`spec3`'s #258 leaves that row unamended for this reason). The vent menu
+    showed its two rows in the other order from card A3's wording; the driver took the row the card
+    asks for, and the control worked. The main session's reading: the card's wording, not the
+    control, differed, so no miss; the owner can veto. *Recommendation:* on that reading the record
+    shows no miss, so close S3 on it, stated as AI-driven and not a person's time. *Class:* operator:
+    policy.
+12. **Decision 16, `authoring budgets (ubuntu-24.04)` as a required check.** It passed on seven push
+    runs of `main` in a row from `cert3`'s merge to `a8aa864a` (`9893031e`, `23a76625`, `4ce711cc`,
+    `95cd0301`, `7a604e22`, `5e62ba7`, `a8aa864a`), and on `8da088de`'s push run 46058050863 as well,
+    the eighth (the run was still in progress when this was written; its `authoring budgets` job had
+    passed). *Recommendation:* make it required. *Class:* operator: policy.
+13. **Decision 10.** Ruled (item 154 (3)): the testers play a private `v0.1.0-rc.1` "cut from S3’s last
+    green commit after the owner’s review of S3’s demo". What is still open is which commit that is.
+    *Recommendation:* the commit this review closes S3 on. *Class:* operator: policy.
+14. **Whether the merge delegation runs on into S4** (item 152 (2), decision 19; CLAUDE.md: it returns
     to the owner at this review). *Recommendation:* renew it on the same terms for the stage the
     re-strategy interview plans. *Class:* operator: policy.
-16. **Item 162 (8)'s parked items** (the radar lab, macOS in previews, whether the owner's global
+15. **Item 162 (8)'s parked items** (the radar lab, macOS in previews, whether the owner's global
     release rules apply here, where the briefs folder is backed up, whether item 42's registrations
     were made). *Recommendation:* take them at the re-strategy interview. *Class:* operator: priority.
-17. **Spec section 14's Easy's Survey post against the build.** Two readings. The spec's sentence, as
-    item 154 (2) quoted it when the owner ruled "Yes, Easy raids": Easy places a Survey post "when the
-    enemy sightings it needs are stale or missing", and its scouts refresh those sightings before the
-    next Lull, so its raid can come by round 2 or 3 (item 154 (2)'s recorded downside). The build, as
-    the owner ruled on 2026-11-22 ("Refresh only (Recommended)", item 173 (1)): the sentence binds the
-    refresh of sightings already held, a first discovery may take longer, and the scout count stays 2
-    until S5; `opr3` (#205, item 180) built the post, and on seed 20 Easy first sights the owner's
-    beacons in round 5. *Recommendation:* amend spec section 14 to the build as ruled on 2026-11-22.
-    *Class:* operator: intent.
-18. **Which measure a beacon's "nearest" takes, after item 168 (9).** `spec3`'s #258 leaves spec
+16. **Spec section 14's Easy's Survey post (decision 3), which `spec3`'s #258 left unamended.** The
+    owner ruled the post goes up "on spec §14’s trigger" (item 154 (2)); the build weighs the post in
+    one ranking and it goes up in round 4 (item 180 (12)), and Easy raids in 3 of 60 nightly matches
+    (item 219 (8)). Two readings: keep the trigger and treat the build as owed to it, or accept the
+    ranked post and amend section 14. *Recommendation:* take it with the balance pause at the
+    re-strategy (answers 22 and 26); until then the spec's sentence stays. *Class:* operator: intent.
+17. **Which measure a beacon's "nearest" takes, after item 168 (9).** `spec3`'s #258 leaves spec
     section 10 silent on it. The three sources: item 156 (8), a main-session call of 2026-11-05,
-    "`BeaconRef.nearest` stays octile through the public v0.1"; item 151 (2) (a), "'Nearest' is
+    "`BeaconRef.nearest` stays octile through the public v0.1"; item 151 (2) (a), "“Nearest” is
     measured straight-line from the staging point": as an Attack target the nearest known enemy
     beacon, the seatless enemy commander and the `NEAREST_KNOWN` retarget rank by `Sq` distance from
     the Attack beacon's staging point, ties to the lowest id; and the owner's later "Approve" of item
@@ -638,15 +665,29 @@ its class. None is answered here.
     spec per case, re-opened with S4's fog, or apply 168 (9) to the walked cases in the first sim lane
     after S3, which moves chains. The lane's lean is the first, since no committed match is known to
     pick differently under the two, but the words are the owner's. *Class:* operator: intent.
+18. **The theme sentence** (item 224 (13)). The owner asked for it (2026-11-27): "in addition to
+    referencing metasploit as inspiration, include 'cairn' as the latest generation of pharmakos". The
+    sentence `spec3`'s #258 landed reads: "The inspiration is Metasploit, the framework a defender
+    tests with and an attacker breaks in with; its latest generation is Cairn, an open-source engine
+    that coordinates AI agents toward a goal and is used for autonomous penetration testing by both."
+    It moves the owner's "the latest generation of pharmakos" to Metasploit's lineage ("its latest
+    generation is Cairn"), which is the main session's reading. The sentence was shown to the owner,
+    who answered "continue. go with your recommendations"; the main session does not record that as
+    approval of the wording. The spec marks the sentence Decided on the owner's request, and the
+    wording is the owner's to keep or change. *Recommendation:* keep the sentence. *Class:* operator:
+    intent.
+19. **The fun gate's readiness list** (plan section 7, decision 19): the main session's check of
+    section 1.4's six items is the table "The fun gate's readiness (section 1.4), checked" below. Does
+    the owner accept it? *Recommendation:* accept. *Class:* operator: policy.
 
 **Held for the re-strategy interview, not in this batch:** the order of `deps3` and the scouts'
 routing after S3 (answers 24 and 30, items 217 (3) and 220 (5)); the decision tick's kinds'
 disagreement (items 217 (6) and 223 (7)); the veto list of item 217 (6) (the sighting table's room,
 each seat's list and avoid-area rooms and the interpreter's two ceilings, item 219 (1) and (5), and the
 reading of answer 20); the balance re-read of every S2, economy, power and map row, the duel report's
-reading and the lone carrier (items 217 (6) and 219 (10)); the lane limit's wording (AGENTS.md section
-6 and spec section 15 say 2 to 3 agents; the owner's latest word is four); and the re-strategy itself
-(item 173 (7)).
+reading and the lone carrier (items 217 (6) and 219 (10)); the two screenshot observations the main
+session's notes hold (item 217 (6)); the lane limit's wording (AGENTS.md section 6 and spec section 15
+say 2 to 3 agents; the owner's latest word is four); and the re-strategy itself (item 173 (7)).
 
 ## The fun gate's readiness (section 1.4), checked
 
@@ -656,7 +697,7 @@ reading and the lone carrier (items 217 (6) and 219 (10)); the lane limit's word
 | 2. A first-timer can file a playbook | the guided pick (step 2); Ready with nothing sealed files the safe playbook and says so (`the_filing_line_says_what_ended_the_lull`, run, "ok"); every refusal a sentence (the verifier's catalogue and the gateway's string table) | met |
 | 3. The four metrics recorded and exported, nothing else, no network | `playtest_bundle.rs` (22 tests) and `no_network.rs` (9 tests), run, "ok"; `crates/gamectl/tests/confinement.rs` in CI | met |
 | 4. The zip opens on a clean machine | `clean launch (windows-latest)` and `clean launch (ubuntu-24.04)` green in run 46036162824 on `a8aa864a` (and in 46033625376 on `5e62ba7`); the unsigned note is `README.txt`'s first lines | met |
-| 5. No numeric threshold written anywhere | no threshold in `playtest.gd`, `playtest.rs`, the playtest strings, this sheet or the tester's sheet | **Not met in the spec at `a8aa864a`**: spec section 16's gate row still reads "Go if a majority answer yes and Push attention is a stated majority of the segment"; section 4.4's amendment ("the owner's judgement, on the playtest bundle's four metrics") has not landed there. It is being landed by `spec3`'s pull request, #258 (`docs/s3-spec`; merged as `SPEC3-PENDING`), which merges before this one |
+| 5. No numeric threshold written anywhere | no threshold in `playtest.gd`, `playtest.rs`, the playtest strings, this sheet or the tester's sheet | **Met on `main` at `8da088de`**: `spec3`'s #258 (`docs/s3-spec`, merged as `8da088de36240466e259c486f81bece87626aeeb` at head `4e4a3fb42f7d7b6746e781f7e00cebe7b1458f4b`) replaced spec section 16's "Go if a majority answer yes and Push attention is a stated majority of the segment" by "Go or pivot is the owner's judgement, on the playtest bundle's four metrics (decisions-log item 153 (1)); no threshold is written into the plan or the build". At `a8aa864a`, the zip's commit, the spec still held the old cell; the spec ships in no zip |
 | 6. The tester's sheet exists | `docs/demo/fun-gate-sheet.md`: how to start the zip, turn on Playtest mode, and send the bundle by hand; no tester's name or address, and no channel | met |
 
 ## AGENTS.md section 10, item by item
@@ -667,9 +708,9 @@ reading and the lone carrier (items 217 (6) and 219 (10)); the lane limit's word
 | 2. Hashes committed, every movement explained | plan section 4.2's ledger and its amendments; the last re-bless is `tune3`'s (item 219 (11): two scenario chains, the 129 report goldens and the rules hash's goldens, the determinism chain not moved); `cert3` added six PNG goldens (item 218 (12)); nothing moved since | decisions log |
 | 3. Golden playbooks round-trip, verify and render identically | `tests/golden/plan-core/` and `tests/golden/verifier/`, green on the matrix and compared across systems | run 46036162824 |
 | 4. Headless scenarios assert events and hashes | 24 committed scenarios (all but the three nightly arms) replayed by the packaged `gamectl` against their golden chains, all "ok", the seven under `scenarios/s3/` included, on `5e62ba7`'s zip and again on `a8aa864a`'s | this sheet's packages |
-| 5. The nightly adversarial scenarios | run 45997206064: the Rusher 16 of 20 (open, acknowledged), the Hunter 9, the Turtle 0 | the nightly |
+| 5. The nightly adversarial scenarios | run 45997206064: the Rusher 16 of 20 (open; its acknowledgement for S3's close is asked in question 3), the Hunter 9, the Turtle 0 | the nightly |
 | 6. The depth task and gate | G2 + P3 and P1 certified on `a8aa864a`, the zip's commit, by item 225 (item 223 the morning's record at `7a604e22`); P6 by the closing rule, AI-driven, on the owner's ruling (`docs/demo/p6c-record.md`) | items 223 and 225; the record |
-| 7. Docs in the same PR | **Not all landed at `a8aa864a`**: none of section 4.4's spec amendments (the spec is unchanged there since 2026-10-09), which `spec3`'s pull request, #258 (`docs/s3-spec`; merged as `SPEC3-PENDING`), is landing before this one merges: section 3's Probation paragraph, section 8's licence, section 13's chips, vocabulary and meter, section 14's Survey post, section 16's fun-gate row, sections 3, 16 and 17's v0.1 and the S3 and S4 rows, section 19's memo copy. AGENTS.md section 3 rule 4's S3 client pieces and section 9 item 11's authoring alarm have landed | the spec; AGENTS.md |
+| 7. Docs in the same PR | **Landed on `main` at `8da088de`** by `spec3`'s #258 (merged as `8da088de36240466e259c486f81bece87626aeeb` at head `4e4a3fb42f7d7b6746e781f7e00cebe7b1458f4b`): section 4.4's spec amendments (section 3's Probation paragraph, section 8's licence, section 13's chips, vocabulary and meter, section 14's vision sentence, section 16's fun-gate row, the v0.1 sentences of sections 1, 3, 16 and 17, the S3, S4 and S6 rows, section 19's rows) and AGENTS.md's section 3 rule 4 (`ed3a`, `ed3b`), section 7 and section 10. **Left unamended by #258, for the owner:** section 16's P6 row (question 11), a beacon's "nearest" in section 10 (question 17), section 14's Easy's Survey post (question 16), section 6's Survey "They avoid known threats" (the scouts' routing, answer 24's first lane after S3), and section 15's "at most 2–3 agents" (the held list). AGENTS.md section 9 item 11's authoring alarm had landed before | the spec; AGENTS.md |
 | 8. The owner reviews the demo | this review | the owner |
 
 ## Found while writing this sheet
@@ -679,10 +720,11 @@ reading and the lone carrier (items 217 (6) and 219 (10)); the lane limit's word
   refusal in `crates/sim/src/attack.rs`; the rest is tests. The main session ruled (engineering:
   decided) that item 223's condition holds by its letter, so the sheet was moved to `a8aa864a`, the zip
   rebuilt on it and the certifying runs retaken on it (item 225).
-- **AGENTS.md section 7** says the playtest bundle contains "survey, metrics, recording and the
+- **AGENTS.md section 7** said the playtest bundle contains "survey, metrics, recording and the
   diagnostics log"; the bundle holds `manifest.json`, `survey.json`, `metrics.json` and
-  `diagnostics.log`, and no recording (`the_bundle_holds_exactly_its_four_entries`). AGENTS.md is a
-  contract file, so this lane does not edit it.
+  `diagnostics.log`, and no recording (`the_bundle_holds_exactly_its_four_entries`). Fixed by
+  `spec3`'s #258 (`8da088de`): it now reads "containing the manifest, the survey, metrics and the
+  diagnostics log only, and no recording until S7 builds recordings".
 - **"0.001 to - s" in the hold step's number popup** (found at the P6 read; for the first client lane
   after S3, changed nothing now). The popup reads "The gateway's range here: 0.001 to - s." where the
   range has no top. The words are the client's: `godot/scripts/strings.gd` line 163,
