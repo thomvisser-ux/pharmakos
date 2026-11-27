@@ -74,11 +74,18 @@ pub const fn is_whitespace(byte: u8) -> bool {
 }
 
 /// A text as the grammar's scanners read it (S3's `vfyq2`, fix pass 1, item
-/// 1): a byte at a time ([`Scan::get`]), or a piece already read
-/// ([`Scan::slice`]), each byte counted, and no other way in. The count goes
-/// to the work meter ([`super::work`]) when the scan is dropped, so every byte
-/// a scanner looks at, a second look included, is on the meter: a scanner
-/// that rereads the text fails the linearity tests rather than only running
+/// 1): a byte at a time ([`Scan::get`]), a piece already read
+/// ([`Scan::slice`]), or one of the two runs this type reads itself, of
+/// whitespace and of a string's plain bytes (`whitespace_end` and
+/// `plain_end`, S3's `p1m`), and no other way in. `get` and `slice` count
+/// each byte they read. The two runs count what `get` would have counted
+/// reading them a byte at a time, exactly (the tests in `runs` below hold
+/// each to that loop, position and count); the whitespace run reads eight
+/// bytes at a time, so it may look at up to eight bytes for each one it
+/// counts, a constant. The count goes to the work meter ([`super::work`])
+/// when the scan is dropped, so the bytes a scanner looks at, a second look
+/// included, are on the meter to within that constant: a scanner that
+/// rereads the text fails the linearity tests rather than only running
 /// slower, which a meter fed by the scanners' own reports could not promise.
 #[derive(Debug)]
 pub struct Scan<'t> {
@@ -123,58 +130,61 @@ impl<'t> Scan<'t> {
         self.text.is_empty()
     }
 
-    /// The byte after the run of whitespace that starts at `at`, with every
-    /// byte looked at counted: the run's, and the one byte, or the text's end,
-    /// that ends it, which is what reading the run a byte at a time through
-    /// [`Scan::get`] counts.
+    /// The byte after the run of whitespace that starts at `at`, counted as
+    /// reading the run a byte at a time through [`Scan::get`] counts it: the
+    /// run's bytes, and the one byte, or the text's end, that ends it.
     ///
     /// Canonical text is indented, and at the size budget four bytes in five
     /// of a playbook's are that indentation, so the run is read eight bytes
     /// at a time: a word that is all spaces is taken whole, and one that is
-    /// not gives up its leading spaces at once, by the place of its first
-    /// byte that is no space.
+    /// not gives up its leading spaces and ends the stride. A word may hold
+    /// up to seven bytes past the run's end, and a word after a line feed
+    /// holds bytes the word before it held, so the bytes looked at are at
+    /// most eight for each byte counted (the bound [`Scan`]'s doc states).
     fn whitespace_end(&self, at: usize) -> usize {
-        const SPACES: u64 = u64::from_le_bytes([b' '; 8]);
-        let rest = self.text.as_bytes().get(at..).unwrap_or(&[]);
+        const SPACES: [u8; 8] = [b' '; 8];
+        let Some(rest) = self.text.as_bytes().get(at..) else {
+            // Past the text's end: the one read that finds no byte.
+            self.count(1);
+            return at;
+        };
         let mut run: usize = 0;
-        while let Some(eight) = rest.get(run..).and_then(<[u8]>::first_chunk::<8>) {
-            // Little-endian, so the text's first byte is the lowest: a byte
-            // that is a space is zero here, and the zero bits below the first
-            // bit set are whole bytes of spaces and part of the byte after.
-            let others = u64::from_le_bytes(*eight) ^ SPACES;
-            if others == 0 {
-                run = run.saturating_add(eight.len());
-                continue;
+        loop {
+            match rest.get(run..).and_then(<[u8]>::first_chunk::<8>) {
+                Some(eight) if *eight == SPACES => {
+                    run = run.saturating_add(eight.len());
+                    continue;
+                }
+                Some(eight) => {
+                    let spaces = eight.iter().take_while(|byte| **byte == b' ').count();
+                    run = run.saturating_add(spaces);
+                }
+                // Fewer than eight bytes are left: a byte at a time.
+                None => {}
             }
-            // At most seven. Were the count ever not a `usize`, none would be
-            // taken here and the byte below would take the first of them:
-            // slower, and the same answer.
-            let spaces = usize::try_from(others.trailing_zeros() >> 3).unwrap_or(0);
-            run = run.saturating_add(spaces);
             if !rest.get(run).copied().is_some_and(is_whitespace) {
                 self.count(run.saturating_add(1));
                 return at.saturating_add(run);
             }
             run = run.saturating_add(1);
         }
-        // Fewer than eight bytes are left.
-        while rest.get(run).copied().is_some_and(is_whitespace) {
-            run = run.saturating_add(1);
-        }
-        self.count(run.saturating_add(1));
-        at.saturating_add(run)
     }
 
     /// The byte after the run that starts at `at` of a string's bytes that
     /// stand for themselves: the first quote, backslash or control character,
-    /// or the text's end. Counted as [`Scan::whitespace_end`] counts: the
-    /// run's bytes and the one that ends it.
+    /// or the text's end. Counted as reading the run a byte at a time through
+    /// [`Scan::get`] counts it: the run's bytes and the one byte, or the
+    /// text's end, that ends it; no byte past that one is looked at.
     fn plain_end(&self, at: usize) -> usize {
-        let rest = self.text.as_bytes().get(at..).unwrap_or(&[]);
+        let Some(rest) = self.text.as_bytes().get(at..) else {
+            // Past the text's end: the one read that finds no byte.
+            self.count(1);
+            return at;
+        };
         let run = rest
             .iter()
-            .position(|&byte| byte == b'"' || byte == b'\\' || byte < 0x20)
-            .unwrap_or(rest.len());
+            .take_while(|byte| !matches!(**byte, b'"' | b'\\' | 0x00..0x20))
+            .count();
         self.count(run.saturating_add(1));
         at.saturating_add(run)
     }
@@ -1419,7 +1429,7 @@ mod engine_cap {
 }
 
 #[cfg(test)]
-mod whitespace_runs {
+mod runs {
     use super::{Scan, is_whitespace, whitespace_end};
     use crate::json::work;
 
@@ -1470,6 +1480,66 @@ mod whitespace_runs {
                 assert_eq!(
                     metered(text, at, whitespace_end),
                     metered(text, at, a_byte_at_a_time),
+                    "{text:?} from {at}"
+                );
+                checked = checked.saturating_add(1);
+            }
+        }
+        assert!(checked > 100_000, "only {checked} runs were read");
+    }
+
+    /// A string's plain run read a byte at a time through [`Scan::get`], as
+    /// [`super::string`] read it before `plain_end`.
+    fn plain_a_byte_at_a_time(scan: &Scan<'_>, at: usize) -> usize {
+        let mut pos = at;
+        while let Some(byte) = scan.get(pos) {
+            if byte == b'"' || byte == b'\\' || byte < 0x20 {
+                break;
+            }
+            pos = pos.saturating_add(1);
+        }
+        pos
+    }
+
+    fn plain_end(scan: &Scan<'_>, at: usize) -> usize {
+        scan.plain_end(at)
+    }
+
+    /// Plain runs of each length to twenty, of ASCII and of characters two,
+    /// three and four bytes long, ended by each byte that ends one (a quote,
+    /// a backslash, each control character, the text's end) and followed by
+    /// each byte that must not (a space, the first byte past the controls, a
+    /// delete, a slash), read from every byte of the text, the middle of a
+    /// character included, and from past its end.
+    #[test]
+    fn a_plain_run_read_in_one_pass_ends_and_counts_as_one_read_a_byte_at_a_time() {
+        let mut ends: Vec<String> = vec![String::new(), "\"".into(), "\\".into()];
+        ends.extend((0_u8..0x20).map(|control| char::from(control).to_string()));
+        let mut texts: Vec<String> = Vec::new();
+        for length in 0_usize..=20 {
+            for unit in [
+                "a",
+                " ",
+                "\u{20}!",
+                "\u{7f}",
+                "/",
+                "\u{e9}",
+                "\u{20ac}",
+                "\u{1f600}",
+            ] {
+                let run = unit.repeat(length);
+                for end in &ends {
+                    texts.push(format!("{run}{end}"));
+                    texts.push(format!("{run}{end}{run}\"tail"));
+                }
+            }
+        }
+        let mut checked: usize = 0;
+        for text in &texts {
+            for at in 0..=text.len().saturating_add(2) {
+                assert_eq!(
+                    metered(text, at, plain_end),
+                    metered(text, at, plain_a_byte_at_a_time),
                     "{text:?} from {at}"
                 );
                 checked = checked.saturating_add(1);

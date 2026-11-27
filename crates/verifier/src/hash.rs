@@ -8,9 +8,12 @@
 //! AGENTS.md section 5 asks that the project never add a second hash function,
 //! and decisions-log item 70 keeps the canonical encoding and the state hash
 //! together in `pharmakos-sim`. So nothing here computes anything: it builds
-//! **bytes**, in a canonical order, and hands them to
-//! [`Enc`](pharmakos_sim::encoding::Enc), which is xxh3-64 under the project's
-//! one seed. This crate takes no hashing dependency of its own, and the
+//! **bytes**, in a canonical order, and hands them to the sim's encoding:
+//! the small parts are written by [`Enc`](pharmakos_sim::encoding::Enc) and
+//! every part, the playbook and the snapshot as they stand among them, goes
+//! to [`StreamingDigest`](pharmakos_sim::encoding::StreamingDigest), which is
+//! xxh3-64 under the project's one seed and answers what `Enc` answers for
+//! the parts joined. This crate takes no hashing dependency of its own, and the
 //! confinement test asserts that it never will.
 //!
 //! # The five inputs, in this order
@@ -208,7 +211,8 @@ impl ReportHashes {
 /// The fifth input, the depth, after the first four: the report hash.
 fn at_depth(inputs: &StreamingDigest, depth: Depth) -> u64 {
     let mut digest = inputs.clone();
-    let mut part = Enc::with_capacity(4);
+    // The encoding's version byte and the depth's four.
+    let mut part = Enc::with_capacity(5);
     // 5. the depth
     part.i32(i32::from(depth));
     digest.update(part.body());

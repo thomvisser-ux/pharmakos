@@ -349,10 +349,18 @@ impl Gen {
     }
 
     fn space(&mut self, out: &mut String) {
-        match self.rng.below(6) {
+        match self.rng.below(7) {
             0 => out.push(' '),
             1 => out.push_str("\n  "),
             2 => out.push_str("\r\n\t"),
+            // A line feed and an indent across the grammar's eight-byte
+            // stride (`Scan::whitespace_end`), as canonical text has them.
+            3 => {
+                out.push('\n');
+                for _ in 0..self.rng.below(40) {
+                    out.push(' ');
+                }
+            }
             _ => {}
         }
     }

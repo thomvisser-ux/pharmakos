@@ -29,7 +29,8 @@
 //! length to 300, across xxh3's block boundaries and under every chunking it
 //! tries). The streaming shape exists for the plan fingerprint (S3's
 //! `fpstream`), whose canonical text is hashed as it is written and never
-//! held whole.
+//! held whole, and for the verifier's report hash (S3's `p1m`), whose
+//! playbook and snapshot are hashed where they stand and never copied.
 
 use xxhash_rust::xxh3::{Xxh3, xxh3_64_with_seed};
 
