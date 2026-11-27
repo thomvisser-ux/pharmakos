@@ -527,6 +527,13 @@ the owner can veto, unless it quotes the owner.
     a better number, because the rule reads the gate once; the owner can veto. The P6 practice notes'
     "a click was swallowed" lines have the same cause. The lesson for the next hand read: move the
     game away from the driving application's window first.
+13. **`spec3`'s #258 changes AGENTS.md**: section 3 rule 4's `ed3a` and `ed3b` clauses (citing item
+    224 (14), which records #166 and #188), section 7's playtest sentence, and section 10's ladder
+    wording ("on the owner's go verdict"). It merges under the owner's delegation (item 152; CLAUDE.md,
+    "Permissions") after two adversarial reviews. Each change makes the file agree with an owner's
+    ruling (item 154 (3); decision 11) or with what merged lanes built, and none changes a rule; items
+    183 (3), 217 (7) (b) and 223 (11) took the same reading. The reading is the main session's; the
+    owner can veto it.
 
 ## Owner rulings at the demo
 
@@ -542,8 +549,12 @@ its class. None is answered here.
    `locomotion.climb_surcharge` 4). No row has a balance report line: `tune3` made no re-run (item 219
    (10)). *Recommendation:* keep revision 8 for S3, and make the balance re-read the first tuning task
    once the pause lifts, as answer 26 says. *Class:* operator: priority.
-2. **The Spire's numbers and the charge's damage** ($120, 500 HP, 3 kW, the sphere 24 to 36, a 60 s
-   build; `combat.charge_damage_hp` 60), not read against a duel report (item 219 (10)).
+2. **The Spire's numbers, its licence's rule and the charge's damage** ($120, 500 HP, 3 kW, the
+   sphere 24 to 36 by `structures.resonance_spire_sphere_bonus_voxels` 12, a 60 s build;
+   `licences.resonance_vents` 2, Generators on two vents at a settlement; `combat.charge_damage_hp`
+   60), not read against a duel report (item 219 (10)); each is a Tuning row, the owner's at S3's
+   demo, and `spec3`'s #258 states the first two as today's Tuning rows, not as Decided (the size
+   budget's 128 is question 1's).
    *Recommendation:* keep for S3. *Class:* operator: intent.
 3. **The nightly bands and Easy's raids, as measured** (answer 26): the Rusher 16 of 20, over its
    band; Easy raiding in 3 of 60 matches, all against the Turtle, none before round 5.
@@ -577,8 +588,9 @@ its class. None is answered here.
     diagnosis and not a proof; the lesson, "restart Windows first". *Recommendation:* keep R13 open until a later certifying night
     reads clean after a restart, and fix the during-run poll first (item 223 (4)). *Class:* operator:
     risk.
-11. **P6** (the line at the top). *Recommendation:* if the record shows no miss, close S3 on it,
-    stated as AI-driven and not a person's time. *Class:* operator: policy.
+11. **P6** (the line at the top), and the spec's section 16 P6 row is then amended to the ruling
+    (`spec3`'s #258 leaves that row unamended for this reason). *Recommendation:* the record shows no
+    miss, so close S3 on it, stated as AI-driven and not a person's time. *Class:* operator: policy.
 12. **Decision 16, `authoring budgets (ubuntu-24.04)` as a required check.** It has passed on six
     push runs of `main` in a row since `cert3` merged, seven with `a8aa864a` (`9893031e`, `23a76625`,
     `4ce711cc`, `95cd0301`, `7a604e22`, `5e62ba7`, `a8aa864a`). *Recommendation:* make it required. *Class:* operator: policy.
@@ -602,6 +614,30 @@ its class. None is answered here.
     until S5; `opr3` (#205, item 180) built the post, and on seed 20 Easy first sights the owner's
     beacons in round 5. *Recommendation:* amend spec section 14 to the build as ruled on 2026-11-22.
     *Class:* operator: intent.
+18. **Which measure a beacon's "nearest" takes, after item 168 (9).** `spec3`'s #258 leaves spec
+    section 10 silent on it. The three sources: item 156 (8), a main-session call of 2026-11-05,
+    "`BeaconRef.nearest` stays octile through the public v0.1"; item 151 (2) (a), "'Nearest' is
+    measured straight-line from the staging point": as an Attack target the nearest known enemy
+    beacon, the seatless enemy commander and the `NEAREST_KNOWN` retarget rank by `Sq` distance from
+    the Attack beacon's staging point, ties to the lowest id; and the owner's later "Approve" of item
+    168 (9) (2026-11-21): "A choice a unit then walks to (a place the unit goes) ranks by the walk the
+    router serves", `toward`'s stone by the least walking cost over the terrain. **What is built
+    today:** (a) a `nearest` own-beacon selector, in a condition and in a route step alike, resolves
+    through `resolve_beacon` and its siblings in `crates/sim/src/interpreter/cond.rs` to `rank`
+    with `Rank::Nearest`, whose key is `octile`, the octile ground distance from the commander at
+    the rules' step costs, ties to the lowest id: no walk is served; (b) Attack's nearest known enemy
+    beacon is `nearest_known_beacon` in `crates/sim/src/attack.rs`, keyed by `Sq::between` the
+    sighting and the staging point (at launch, from `launch_target`'s `Aim::NearestKnownBeacon`) or
+    the lost target's place (the `NEAREST_KNOWN` retarget), ties to the lowest id: no walk is served.
+    The features' "nearest" (vents, seams) is the served walk since `p3fix` (item 169). **Both
+    beacon cases contradict 168 (9)'s words where a unit then walks to the choice**: a route step
+    that walks the commander to the nearest own beacon, and the raiders sent to the nearest known
+    enemy beacon, rank by a straight or octile distance and not by the walk the router serves (a
+    condition that only reads a beacon is not a walk). *Recommendation:* rule it: either keep
+    today's two measures for v0.1 (156 (8) and 151 (2) (a) beside 168 (9)) and write them into the
+    spec per case, re-opened with S4's fog, or apply 168 (9) to the walked cases in the first sim lane
+    after S3, which moves chains. The lane's lean is the first, since no committed match is known to
+    pick differently under the two, but the words are the owner's. *Class:* operator: intent.
 
 **Held for the re-strategy interview, not in this batch:** the order of `deps3` and the scouts'
 routing after S3 (answers 24 and 30, items 217 (3) and 220 (5)); the decision tick's kinds'
