@@ -2264,13 +2264,7 @@ fn built_scene() -> (Surface, Token) {
         r#"{{"blueprint_id": "mortar", "anchor": {{"voxel": {{"x": {}, "y": {}, "z": {ground}}}}}, "order": 2}},"#,
         MORTAR_SITE[0], MORTAR_SITE[1]
     );
-    let text = scenario.replace(
-        cannon,
-        &format!(
-            "{cannon}
-              {mortar}"
-        ),
-    );
+    let text = scenario.replace(cannon, &format!("{cannon}\n              {mortar}"));
     assert_ne!(text, scenario, "the scenario names its autocannon");
     seal_and_push(&mut surface, &token, support::LULL_MS, &text);
     for _ in 0..1_200 {

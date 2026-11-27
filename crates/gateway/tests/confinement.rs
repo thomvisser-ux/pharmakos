@@ -2832,14 +2832,7 @@ fn the_fallback_scan_finds_what_it_looks_for() {
 #[test]
 fn no_shipped_code_calls_a_sim_fixture() {
     let findings = scan(SIM_FIXTURES);
-    assert!(
-        findings.is_empty(),
-        "{}",
-        findings.join(
-            "
-"
-        )
-    );
+    assert!(findings.is_empty(), "{}", findings.join("\n"));
 }
 
 // ---------------------------------------------------------------------------

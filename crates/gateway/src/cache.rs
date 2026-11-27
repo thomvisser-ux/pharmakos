@@ -961,22 +961,14 @@ mod tests {
         std::fs::remove_dir_all(cache.directory()).expect("the folder removed");
         assert_eq!(
             cache
-                .write_sealed(
-                    SeatId::new(1),
-                    1,
-                    "{}
-"
-                )
+                .write_sealed(SeatId::new(1), 1, "{}\n")
                 .expect_err("no folder")
                 .code(),
             Code::Internal
         );
         assert_eq!(
             cache
-                .write_replay(
-                    1, "1	00
-"
-                )
+                .write_replay(1, "1\t00\n")
                 .expect_err("no folder")
                 .code(),
             Code::Internal
