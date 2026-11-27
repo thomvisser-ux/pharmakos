@@ -1066,9 +1066,11 @@ change moves `report_hash` is granted, for the re-bless alone, `tests/golden/gat
 
 [Amended by items 218, 220 and 223. `cert3` part 1 (#246) built the commands and the report's form
 and not the runs (item 218). The recorded runs were taken by the main session on the owner's
-machine, after the owner had released it: on 2026-11-26 at `23a76625`, which certified nothing, P1
-QUICK missing on WSL2 (item 220); and on 2026-11-27 at `7a604e22`, after a restart of Windows,
-which certify G2 + P3, P1 and G3′-real on the final rules (item 223). S1-49's seed is kept: E12's
+machine, after the owner had released it (answer 23, item 217 (3); answer 27, item 220 (5)): on
+2026-11-26 at `23a76625`, which certified nothing, P1 QUICK missing on WSL2 (item 220); and on
+2026-11-27 at `7a604e22`, after a restart of Windows, which certify G2 + P3, P1, and G3′-real on
+the final rules with raids at `budget_128` and `full_eval` (item 223); S2's segment, run beside
+them, is a published figure and certifies nothing (item 223 (3)). S1-49's seed is kept: E12's
 rule read the second seed within 20 % of the first in all six repetitions (item 223 (7)).]
 
 ### `prob` — `crates/client-gdext` + `godot/`: Probation and Playtest mode
@@ -1140,9 +1142,14 @@ Owns above.]
 `demo3` (P1 FULL and G2 + P3 re-run on `tune3`'s rules, and by item 162 (5) the end-to-end bar and
 QUICK at the final budget) was made by the certifying runs of 2026-11-27 on `main` at `7a604e22`,
 the final tree, and is recorded in item 223; `demo3` cites that record and does not run them again
-(the main session's reading; the owner can veto). The register's S3 rows these gates touched,
-S1-49 (`BENCH_SEED`, kept) and S3-32 (`BREACH_EXPANSIONS`, with the breach probe's cost at the gate
-load), stay the owner's at S3's demo with item 223's figures.]
+(the main session's reading; the owner can veto), while no change to the sim, the verifier, the
+gateway, the bench or the rules merges before the demo; if one does, `demo3` takes the runs again on
+that tree. `demo3` still records section 5.2's items 2 and 3 on the final tree: the cross-OS guard
+green over every verifier report on `main`'s push at the demo's commit, and the nightly fuzz job's
+10 000 playbooks with no panic. The register's rows these gates touched, S1-49 (an S1 row;
+`BENCH_SEED`, kept) and S3-32 (`BREACH_EXPANSIONS`, with the breach probe's cost at the gate load),
+stay the owner's as their markers read ("at S3's exit" and "at S3's demo"), with item 223's
+figures.]
 
 ### `p6` — the P6 editor timing gate's sessions (main session, not a lane)
 
@@ -1337,7 +1344,7 @@ start waits for the other's merge.]
 
 [Amended by items 217 to 219. Two pull requests merged on 2026-11-26 (the local date; GitHub's stamps run to 2026-11-26T23:58Z), in this order: `cert3` part 1 (#246, `9893031e`) and `tune3` (#250, `23a76625`). `cert3` part 1 built the harnesses section 5's gates are certified on, each certifying line stamped with what ran and certifying only under `PHARMAKOS_BENCH_CERTIFY=1`, which no workflow sets; E12's seed rule on the hosted FULL; the decision tick by kind; the watch of E15, E17 and the breach search; the `authoring budgets (ubuntu-24.04)` job, which can go red; the cross-OS guard over every verifier report; and the six hostless shots with their goldens, under the owner's answer 20. **The certifying runs were not in it.** `tune3` is rules revision 8 (scout sight 28 and the Spire's build-time row, `rules_hash` `641055eb0d38815a`), each seat's own list and avoid-area rooms tied to the size budget by a test, the sighting table's room derived from the world's asset tables, and one Survey fix; it kept every other row at its value with no balance re-run, under answer 22, and closed the markers of E17's rooms and of the interpreter's two ceilings. The owner's answers 23 to 26 (item 217): the certifying runs are made overnight; Survey scouts route round the guns their seat sees (the owner's label: "Yes, first lane after S3"), with the keep rule (Q1c) re-measured there; answer 17 put `deps3` first after S3's demo too, and the order between the two is the owner's, held for the re-strategy interview (item 217 (3) and (6)); a sighting hidden under a seen gun goes stale and is logged; and S3's demo shows the Rusher's 16 of 20 and Easy's raids in 3 of 60 as measured, both the first tuning tasks once the balance pause lifts. **The remaining order as it now is, superseding the remaining order of the amendment of items 213 to 216:** the certifying runs of 2026-11-26 were taken on `main` at `23a76625` and certified nothing, P1 QUICK having missed on WSL2 (item 220); the main session's `close3` pull request, whose own crate is `crates/bench` (the watch reads the breach search's expansions, item 218 (10) (b)) and which is **granted comment-only edits** in crates no running lane owns, in exactly these places, each marker keeping its what, who and stage (no check follows this sweep, so it is not AGENTS.md section 6's comment exception of decisions-log items 137 and 141 but named places under that section, which the main session reads line by line at the merge): the fourteen files that cited "184 (10)" for item 184 (3)'s ruling (items 212 (3), 213 (7) (c) and 217 (7) (c): `crates/gateway/tests/editor_wire.rs`, `crates/operator/src/price.rs`, `crates/plan-core/src/shape.rs`, `crates/plan-core/tests/settings_presence.rs`, `crates/proto/tests/grammar.rs`, `crates/sim/src/interpreter.rs`, `crates/sim/src/interpreter/exec.rs`, `crates/sim/src/mining.rs`, `crates/sim/tests/settings_presence.rs`, `crates/verifier/src/{catalogue,interface,projection,semantics}.rs` and `crates/verifier/tests/clears.rs`); the three world-total markers in `crates/sim/src/world.rs` and the commander's-speed marker in `crates/sim/src/rules.rs` (item 219 (13)); `placement_verdict`'s doc comment in `crates/client-gdext/src/editor.rs` (item 214 (10) sent it to the next owner of `client-gdext`; the main session takes it here); and the six `godot/scripts/*_shot.gd` headers; three more named places, which are not comments: the prose of `godot/README.md`'s scene table, the prose of `rules/README.md`'s `climb_surcharge` row, and assertions on `BreachScratch::expansions` in `crates/sim/tests/attack.rs` and `crates/sim/tests/allocations.rs`, the tests that already run the breach search; because it changes `godot/` and `rules/`, the main session runs `cargo xtask package` on it before it merges (AGENTS.md section 9); the P1 QUICK margin pull request (the owner's answer 29, item 220 (5)); the owner's restart of Windows and the certifying runs taken again on that tree (answers 27 and 28); the item that records them; `demo3`; and after the demo, the stage the owner plans in the re-strategy interview (item 173 (7)).]
 
-[Amended by items 221 to 223. Three pull requests merged between the evening of 2026-11-26 and the morning of 2026-11-27 (the local dates; GitHub's stamps run from 2026-11-27T04:13Z to 08:09Z), in this order: the docs pull request #251 (`4ce711cc`), which wrote items 217 to 220 and the amendment above with `close3`'s grant; `close3` (#252, `95cd0301`, item 221), under which the G3′ watch's breach probe reads the sim's own count of the states a search expanded, pinned in `crates/sim`'s tests, with the comment, marker and README carries of items 218 (10) and (13) and 219 (13), no hash, golden, chain or rule moving; and the P1 QUICK margin (#253, `7a604e22`, item 222, the owner's answer 29), which streams the report hash and reads indentation a word at a time and a string's plain run in one scan, with no answer, hash or golden moving; no single cause of the slowdown since 2026-11-17 was found, and `CHUNK`'s size was ruled out by timing, which discharges item 218 (10) (a). The owner restarted Windows and said "go" (answer 27; item 223 (1)), and **the certifying runs of 2026-11-27, on `main` at `7a604e22`, certify S3's gates** (item 223): G2 + P3 (repath p99 0.919 ms, one-leg estimate p99 0.499 ms, the estimate's error 0 per mille from the serve and never optimistic), P1 at the 128-unit size budget (QUICK p99 3.349 ms, FULL p99 7.531 ms, the editor's end-to-end wait 8.142 ms), and G3′-real re-certified on `tune3`'s final rules (13.219 / 4.941 ms at S2's load, 12.109 / 4.817 ms and 12.110 / 4.839 ms with raids), each the median of three p99s on the slower system and within its bar on both. Two Windows runs that ended beside another local session's build were left out of the medians and retaken on the idle machine; using them would change no verdict (item 223 (4)). Answer 28's setting was not used. Because the runs were made on the final tree, they are the re-run on the final rules that sections 5.1 item 5 and 5.2 item 6, item 162 (5) and `demo3`'s lane section give `demo3`, and `demo3` does not run them again (the main session's reading, which the owner can veto). Sections 1.1's certification report and 1.2's item 6 for G2 + P3 and P1 FULL with the size budget are item 223's record. **The remaining order as it now is, superseding the remaining order of the amendment of items 217 to 219:** the pull request that writes items 221 to 223, then `demo3`; and after the demo, the stage the owner plans in the re-strategy interview (item 173 (7)).]
+[Amended by items 221 to 223. Three pull requests merged between the evening of 2026-11-26 and the morning of 2026-11-27 (the local dates; GitHub's stamps run from 2026-11-27T04:13Z to 08:09Z), in this order: the docs pull request #251 (`4ce711cc`), which wrote items 217 to 220 and the amendment above with `close3`'s grant; `close3` (#252, `95cd0301`, item 221), under which the G3′ watch's breach probe reads the sim's own count of the states a search expanded, pinned in `crates/sim`'s tests, with the comment, marker and README carries of items 218 (10) and (13) and 219 (13), no hash, golden, chain or rule moving; and the P1 QUICK margin (#253, `7a604e22`, item 222, the owner's answer 29), which streams the report hash and reads indentation a word at a time and a string's plain run in one scan, with no answer, hash or golden moving; no single cause of the slowdown since 2026-11-17 was found, and `CHUNK`'s size was ruled out by timing, which discharges item 218 (10) (a). The owner restarted Windows and said "go" (answer 27; item 223 (1)), and **the certifying runs of 2026-11-27, on `main` at `7a604e22`, certify S3's timed gates** (item 223): G2 + P3 (repath p99 0.919 ms, one-leg estimate p99 0.499 ms, the estimate's error 0 per mille from the serve and never optimistic), P1 at the 128-unit size budget (QUICK p99 3.349 ms, FULL p99 7.531 ms, the editor's end-to-end wait 8.142 ms), and G3′-real re-certified on `tune3`'s final rules with raids (12.109 / 4.817 ms at `budget_128` and 12.110 / 4.839 ms at `full_eval`), each the median of three p99s on the slower system and within its bar on both; S2's segment ran beside them and read 13.219 / 4.941 ms, a published figure, unstamped, that certifies nothing (item 223 (3)). P6 (section 5.3) is not certified by these runs. Two Windows runs that ended beside another local session's build were left out of the medians and retaken on the idle machine; using them would change no verdict (item 223 (4)). Answer 28's setting was not used. Because the runs were made on the final tree, they are the re-run on the final rules that sections 5.1 item 5 and 5.2 item 6, item 162 (5) and `demo3`'s lane section give `demo3`, and `demo3` does not run them again (the main session's reading, which the owner can veto), while no change to the sim, the verifier, the gateway, the bench or the rules merges before the demo; if one does, `demo3` takes the runs again on that tree (item 223 (8)). Section 1.1's certification report, and 1.2's item 6 for its G2 + P3 and P1 timed half, are item 223's record. **The remaining order as it now is, superseding the remaining order of the amendment of items 217 to 219:** the pull request that writes items 221 to 223, then `demo3`; and after the demo, the stage the owner plans in the re-strategy interview (item 173 (7)).]
 
 **Totals.** 19 tasks, **about 74.5 ad** (65–84), including about 1.5 ad of re-blesses after merges
 of `main`; 73.5 without decision 3's Survey post. **Two critical paths of about 31 working days:**
@@ -1522,7 +1529,8 @@ p99 1.84 ms, estimate p99 0.82 ms, |error| p90 2.6 %, never optimistic; `docs/sp
 
 [Amended by item 223. The recorded runs of item 4 were taken on 2026-11-27 on `main` at `7a604e22`,
 after `tune3`, so on `tune3`'s final rules, and they are item 5's re-run: `demo3` does not run them
-again (the main session's reading; the owner can veto). G2 + P3 is certified: the repath p99 0.919 ms
+again (the main session's reading; the owner can veto) unless a change to the sim, the verifier,
+the gateway, the bench or the rules merges before the demo (`demo3`'s lane section). G2 + P3 is certified: the repath p99 0.919 ms
 and the one-leg estimate p99 0.499 ms (each the median of three p99s, Windows the slower), and the
 estimate's signed error 0 per mille from the serve at every percentile on three seeds, never
 optimistic, identically on both systems. The corner entrance (S3-11) stays unbuilt, and no lever of
@@ -1588,13 +1596,14 @@ hardening. `tune3` can change the size budget after `cert3`, so, by item 162 (5)
 [Amended by item 223. The size budget stayed at 128 units through `tune3`, and the recorded runs of
 2026-11-27, on `main` at `7a604e22` after `tune3` and the P1 QUICK margin (item 222), are item 6's
 re-run on the final rules and the re-run item 162 (5) gives `demo3`, which does not run them again
-(the main session's reading; the owner can veto). Certified at B = 128, each the median of three
+(the main session's reading; the owner can veto) unless a change to the sim, the verifier, the
+gateway, the bench or the rules merges before the demo (`demo3`'s lane section). Certified at B = 128, each the median of three
 p99s, Windows the slower: QUICK 3.349 ms on the worst shape (`route_guards_24_node`), 33 % under its
 bar; FULL 7.531 ms on the worst shape (`handlers_24_node`); the editor's end-to-end wait 8.142 ms
 (`handlers_24_node`), with every shape under its bar; and test (c), the G3′ segment with every seat's
 playbook at B, 12.109 ms (`budget_128`) and 12.110 ms (`full_eval`), WSL2 the slower. Items 2 and 3
-(byte identity, the guard's; the fuzzer, the nightly's) are not what these runs certify. Neither
-fallback was taken.]
+(byte identity, the guard's; the fuzzer, the nightly's) are not what these runs certify, and
+`demo3` records them on the final tree. Neither fallback was taken.]
 
 **The fallback, written now.** If FULL at 128 misses, **a smaller budget** by E24's mechanics, never
 below its floor; if the floor itself misses, the owner rules (decision 18). **Debounce**: the editor
@@ -1974,7 +1983,9 @@ its P1 QUICK median at 8.753 ms against Windows' 4.858 ms and certified nothing 
 diagnosis and not a proof). On 2026-11-27, after a restart of Windows, the gap at the certified
 medians is under R13's 10 %: P1 QUICK's is the largest, Windows 8 % slower (3.349 against 3.101 ms);
 G2's and P3's about 5 %, FULL's 3 % and the end-to-end wait's 1 %, Windows the slower; G3′-real's 1
-to 3 %, WSL2 the slower. The slower system set each figure (item 223 (3)). R13 closes on that run.]
+to 3 %, WSL2 the slower. R13's measure held on both nights: the slower system set every figure
+(item 223 (3)). Its cause on 2026-11-26 stays a diagnosis (item 220 (4)), so R13 stays open, for the
+owner at S3's demo, with item 223's lesson (restart Windows before a certifying night).]
 
 ---
 
