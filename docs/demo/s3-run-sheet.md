@@ -11,13 +11,15 @@ see, and which test or scenario also proves the step, or "by hand only" where no
 session drives the zip by computer control while the owner watches (section 1.1), and presses Ready
 to end a Lull.
 
-It is written against `main` at `5e62ba7` (`5e62ba7473e3a294c96401e52916fb1e9b87335d`, the merge of
-#256, which recorded the certifying runs; decisions-log items run to 223). **One pull request merged
-after it**: #255 (`a8aa864a`), which restores string continuations in three error messages of shipped
-code (two internal ones in `crates/gateway/src/serve.rs` and a rules-load refusal in
-`crates/sim/src/attack.rs`) and in tests. The zip below is built from `5e62ba7` and does not hold it;
-"Found while writing this sheet" says what that means. The main session re-reads this sheet after any
-later merge. The words in quotation marks are the product's own: the gateway's from
+It is written against `main` at `a8aa864a` (`a8aa864a88f2a7ef7129d36d381c994b58502c8e`, the merge of
+#255), the demo's tree. #255 merged after #256 (`5e62ba7`, which recorded the certifying runs of item
+223): in shipped code it changes the text of three messages, two internal errors in
+`crates/gateway/src/serve.rs` (the control pipe failing) and one rules-load refusal in
+`crates/sim/src/attack.rs` (`combat.charge_damage_hp` out of range), each of which had kept a stray line
+break and indent; the rest of it is tests. Since that is a change to the sim and the gateway after
+`7a604e22`, item 223's condition holds by its letter, so **the zip was rebuilt on `a8aa864a` and the
+certifying runs were retaken on it by the main session**; their record is decisions-log item 225. The
+main session re-reads this sheet after any later merge. The words in quotation marks are the product's own: the gateway's from
 `crates/gateway/src/strings.rs` and `crates/plan-core/src/strings.rs`, the verifier's from its
 catalogue, the lobby's and the editor's from `godot/scripts/strings.gd`. A number in angle brackets,
 such as `<N>`, is one the match decides and this sheet cannot know. Row IDs such as S3-33 are rows of
@@ -36,7 +38,9 @@ sheet's final text carried whole through all four rounds (the "whole-text probe"
 holds rows that do not yet qualify, E0416 and E0507, so the runner seals it through its harness door
 there), and each round's own text carried from round 1 (the "round probes": round 1's and round 2's
 texts qualify through `submit_plan` in every round they were sealed). "Headless, round N" below means
-a probe saw the event by the end of round N's Push. A probe sees event kinds, seats and ticks, not
+a probe saw the event by the end of round N's Push. Every probe was played first on `5e62ba7`'s zip
+and again on `a8aa864a`'s: each event log is identical on the two, tick for tick, as #255 moved no
+golden. A probe sees event kinds, seats and ticks, not
 which structure or beacon: where a step names one, the name is the sheet's reading and the check is
 yours.
 
@@ -58,16 +62,22 @@ played live.
 ## Before you start
 
 **The zip.** No S3 tag is cut (decision 10 cuts `v0.1.0-rc.1` after this review; that is the owner's).
-The demo uses a package of `main` at `5e62ba7` built locally by `cargo xtask package`:
+The demo uses a package of `main` at `a8aa864a` built locally by `cargo xtask package`, from a
+detached checkout of that commit:
 
-- Windows: `D:/build/demo3/pharmakos-s3-5e62ba74-windows-x86_64.zip`, 120 357 327 bytes, 27 entries,
-  SHA-256 `7cf6e5cc2e4f5cfd0c28f0f55db3a70fc4456dbb8c97b94097479a5db6fe5b89` (also in
-  `D:/build/demo3/SHA256SUMS.txt`). Its in-editor smoke check printed "[smoke] OK", its entry list
-  matches `tests/golden/package/expected.windows.txt`, `reuse` linted it clean, and it replayed every
-  committed scenario with the packaged `gamectl` against its golden chain, the seven under
-  `scenarios/s3/` included, all "ok" (26 in all).
+- Windows: `D:/build/demo3/pharmakos-s3-a8aa864a-windows-x86_64.zip`, 120 357 327 bytes, 27 entries,
+  SHA-256 `12b47f3f1c220873ebcca2212f023927e6a8689a5e98ba15c4139321d74d2a08` (also in
+  `D:/build/demo3/SHA256SUMS.txt`); its `README.txt` reads "Build: commit a8aa864a88f2". Its
+  in-editor smoke check printed "[smoke] OK", its entry list matches
+  `tests/golden/package/expected.windows.txt`, `reuse` linted it clean, and it replayed every
+  committed scenario that `cargo xtask package` replays with the packaged `gamectl` against its
+  golden chain, the seven under `scenarios/s3/` included, all "ok" (24 in all; the three nightly arms
+  are not among them).
+- The first zip, of `5e62ba7` (`D:/build/demo3/pharmakos-s3-5e62ba74-windows-x86_64.zip`, SHA-256
+  `7cf6e5cc2e4f5cfd0c28f0f55db3a70fc4456dbb8c97b94097479a5db6fe5b89`, the same size and entries),
+  is kept beside it and is not the demo's.
 - Linux: the `pharmakos-linux` artefact of CI's `package (ubuntu-24.04)` job in `main`'s push run for
-  `5e62ba7`, run 46033625376, green (not downloaded for this sheet).
+  `a8aa864a`, run 46036162824, green (not downloaded for this sheet).
 
 The zip holds `Pharmakos.exe`, `gamectl.exe`, the client library, `library/` (five templates),
 `rules/` (revision 8, `rules_hash` `641055eb0d38815a`) and `README.txt`, whose first lines are the
@@ -285,8 +295,9 @@ figure, so the margin itself ("$43 to $58 is left") is the plan's arithmetic, no
 
 ## Beside the demo
 
-Run these from a checkout at `5e62ba7`, with your own target directory. Each was run for this sheet on
-the owner's i7-9800X (not as a timed run); the outputs quoted are from those runs.
+Run these from a checkout at `a8aa864a`, with your own target directory. Each was run for this sheet on
+the owner's i7-9800X (not as a timed run); the outputs quoted are from those runs, first on `5e62ba7`
+and, for the probes and the scenarios, again on `a8aa864a`'s zip.
 
 ### Step 4's brownout, staged
 
@@ -375,11 +386,13 @@ structure table, and `crates/sim/tests/spire.rs`
 
 ### The certification on the final rules
 
-The certifying runs of 2026-11-27, on `main` at `7a604e22` (#253's merge, the final tree: nothing since
-touches the sim, the verifier, the gateway, the bench or the rules before `5e62ba7`), on the owner's
-i7-9800X under Windows and WSL2 Linux, three repetitions a system, the median of the three p99s, the
-slower system deciding; recorded in decisions-log item 223, whose table is copied here as it states
-it:
+**ITEM-225-PENDING.** The certifying runs on the demo's tree, `a8aa864a`, were retaken by the main
+session after #255 (the three message strings above), and their record is decisions-log item 225; its
+figures replace the table below when the main session sends them, and none is written here before
+then. Until then the table is item 223's, the runs of 2026-11-27 on `main` at `7a604e22` (#253's
+merge), on the owner's i7-9800X under Windows and WSL2 Linux, three repetitions a system, the median of
+the three p99s, the slower system deciding, copied as item 223 states it. **It is not the record of
+runs on `a8aa864a`.**
 
 | Gate | Bar | Windows | WSL2 | Deciding |
 | --- | --- | --- | --- | --- |
@@ -396,20 +409,21 @@ it:
 
 The rules hashes as printed: the committed table `641055eb0d38815a`, the G3′ bench table
 `b947507e651166ba`, the layout `46c4018ed990aa15`, the seed `0x00000000ca5caded` (item 223 (2)). The
-size budget stayed at 128 through `tune3`, so these are also the re-run on the final rules that the
-plan gave this lane (sections 5.1 item 5 and 5.2 item 6, item 162 (5)); this lane took no timed run.
-**P1 QUICK's margin:** 3.349 ms, 33 % under its 5 ms bar, the closest any gate came (item 223 (3)).
-Neither fallback was taken (decision 18 has nothing to rule). Not certified by these runs: P6
-(section 5.3, the record above), and P1's byte identity and fuzz run, below.
+size budget stayed at 128 through `tune3`. **ITEM-225-PENDING:** the re-run on the final rules that
+the plan gave this lane (sections 5.1 item 5 and 5.2 item 6, item 162 (5)) is item 225's, on
+`a8aa864a`; this lane took no timed run. **P1 QUICK's margin** on item 223's runs: 3.349 ms, 33 % under
+its 5 ms bar, the closest any gate came (item 223 (3)); item 225's figure replaces it. Not certified by
+these runs: P6 (section 5.3, the record above), and P1's byte identity and fuzz run, below.
 
 ### Section 5.2's items 2 and 3, on the final tree
 
-- **Byte-identical across systems:** `main`'s push run 46033625376 on `5e62ba7`, every job green; its
-  `cross-OS determinism guard` reported "167 kind(s) byte-identical on every leg that has them",
-  among them 130 verifier files on all three legs (the catalogue and 129 reports,
+- **Byte-identical across systems:** `main`'s push run 46036162824 on `a8aa864a`, every job green but
+  the skipped DCO walk (a push run has no pull request's commits to walk); its `cross-OS determinism
+  guard` reported "167 kind(s) byte-identical on every leg that has them", among them 130 verifier
+  files on all three legs (the catalogue and 129 reports,
   `golden/verifier/budget_128/actual.report.json` included).
-- **10 000 fuzzed playbooks, no panic:** the nightly run 45997206064 (scheduled, on `7a604e22`, the
-  final tree) ran `cargo xtask checked-test --package pharmakos-verifier --test fuzz --ignored
+- **10 000 fuzzed playbooks, no panic:** the nightly run 45997206064, the latest (scheduled, on
+  `7a604e22`; #255 changed no verifier source, and no nightly has run on `a8aa864a` yet), ran `cargo xtask checked-test --package pharmakos-verifier --test fuzz --ignored
   --nocapture`: `ten_thousand_playbooks_come_back_as_reports ... ok` and
   `two_hundred_forty_thousand_two_node_edits_that_qualify_compile ... ok`, "2 passed".
 
@@ -524,8 +538,8 @@ its class. None is answered here.
 11. **P6** (the line at the top). *Recommendation:* if the record shows no miss, close S3 on it,
     stated as AI-driven and not a person's time. *Class:* operator: policy.
 12. **Decision 16, `authoring budgets (ubuntu-24.04)` as a required check.** It has passed on six
-    push runs of `main` in a row since `cert3` merged (`9893031e`, `23a76625`, `4ce711cc`, `95cd0301`,
-    `7a604e22`, `5e62ba7`). *Recommendation:* make it required. *Class:* operator: policy.
+    push runs of `main` in a row since `cert3` merged, seven with `a8aa864a` (`9893031e`, `23a76625`,
+    `4ce711cc`, `95cd0301`, `7a604e22`, `5e62ba7`, `a8aa864a`). *Recommendation:* make it required. *Class:* operator: policy.
 13. **Decision 14.** The view's delta mode (S2-12) and the recompute key (S1-34) are measured by
     `cert3`'s watch and their markers already read S7. *Recommendation:* confirm S7. *Class:* operator:
     priority.
@@ -552,30 +566,30 @@ reading and the lone carrier (items 217 (6) and 219 (10)); and the re-strategy i
 | 1. The gate's match is one click | `godot/scripts/host_link.gd`: `PRESET` "probation", `MATCH_SEATS` 2, `HUMAN_SEAT` 0, `ROUND_LIMIT` 3, the rules' ladder (3 / 5 / 8 min), `MATCH_SEED` 20; the gateway's untimed Lulls (`probation.rs`' tests above) | met: "New match: Probation" |
 | 2. A first-timer can file a playbook | the guided pick (step 2); Ready with nothing sealed files the safe playbook and says so (`the_filing_line_says_what_ended_the_lull`, run, "ok"); every refusal a sentence (the verifier's catalogue and the gateway's string table) | met |
 | 3. The four metrics recorded and exported, nothing else, no network | `playtest_bundle.rs` (22 tests) and `no_network.rs` (9 tests), run, "ok"; `crates/gamectl/tests/confinement.rs` in CI | met |
-| 4. The zip opens on a clean machine | `clean launch (windows-latest)` and `clean launch (ubuntu-24.04)` green in run 46033625376 on `5e62ba7`; the unsigned note is `README.txt`'s first lines | met |
-| 5. No numeric threshold written anywhere | no threshold in `playtest.gd`, `playtest.rs`, the playtest strings, this sheet or the tester's sheet | **not met in the spec**: spec section 16's gate row still reads "Go if a majority answer yes and Push attention is a stated majority of the segment"; section 4.4's amendment ("the owner's judgement, on the playtest bundle's four metrics") has not landed. The fix is the main session's spec docs PR |
+| 4. The zip opens on a clean machine | `clean launch (windows-latest)` and `clean launch (ubuntu-24.04)` green in run 46036162824 on `a8aa864a` (and in 46033625376 on `5e62ba7`); the unsigned note is `README.txt`'s first lines | met |
+| 5. No numeric threshold written anywhere | no threshold in `playtest.gd`, `playtest.rs`, the playtest strings, this sheet or the tester's sheet | **SPEC3-PENDING.** **Not met in the spec at `a8aa864a`**: spec section 16's gate row still reads "Go if a majority answer yes and Push attention is a stated majority of the segment"; section 4.4's amendment ("the owner's judgement, on the playtest bundle's four metrics") has not landed there. It is being landed by `spec3`'s pull request (`docs/s3-spec`, number to follow), which merges before this one |
 | 6. The tester's sheet exists | `docs/demo/fun-gate-sheet.md`: how to start the zip, turn on Playtest mode, and send the bundle by hand; no tester's name or address, and no channel | met |
 
 ## AGENTS.md section 10, item by item
 
 | Item | Evidence | Source |
 |---|---|---|
-| 1. `cargo xtask ci` green on the matrix, the systems agreeing | every job of `main`'s push run 46033625376 on `5e62ba7` green; the guard, 167 kinds byte-identical | GitHub Actions |
+| 1. `cargo xtask ci` green on the matrix, the systems agreeing | every job of `main`'s push run 46036162824 on `a8aa864a` green (the DCO walk skipped, as on every push run); the guard, 167 kinds byte-identical | GitHub Actions |
 | 2. Hashes committed, every movement explained | plan section 4.2's ledger and its amendments; the last re-bless is `tune3`'s (item 219 (11): two scenario chains, the 129 report goldens and the rules hash's goldens, the determinism chain not moved); `cert3` added six PNG goldens (item 218 (12)); nothing moved since | decisions log |
-| 3. Golden playbooks round-trip, verify and render identically | `tests/golden/plan-core/` and `tests/golden/verifier/`, green on the matrix and compared across systems | run 46033625376 |
-| 4. Headless scenarios assert events and hashes | 26 committed scenarios replayed by the packaged `gamectl` against their golden chains, all "ok", the seven under `scenarios/s3/` included | this sheet's package |
+| 3. Golden playbooks round-trip, verify and render identically | `tests/golden/plan-core/` and `tests/golden/verifier/`, green on the matrix and compared across systems | run 46036162824 |
+| 4. Headless scenarios assert events and hashes | 24 committed scenarios (all but the three nightly arms) replayed by the packaged `gamectl` against their golden chains, all "ok", the seven under `scenarios/s3/` included, on `5e62ba7`'s zip and again on `a8aa864a`'s | this sheet's packages |
 | 5. The nightly adversarial scenarios | run 45997206064: the Rusher 16 of 20 (open, acknowledged), the Hunter 9, the Turtle 0 | the nightly |
-| 6. The depth task and gate | G2 + P3 and P1 certified (item 223); P6 by the closing rule, AI-driven, on the owner's ruling (`docs/demo/p6c-record.md`) | item 223; the record |
-| 7. Docs in the same PR | **not all landed**: none of section 4.4's spec amendments (the spec is unchanged since 2026-10-09): section 3's Probation paragraph, section 8's licence, section 13's chips, vocabulary and meter, section 14's Survey post, section 16's fun-gate row, sections 3, 16 and 17's v0.1 and the S3 and S4 rows, section 19's memo copy. AGENTS.md section 3 rule 4's S3 client pieces and section 9 item 11's authoring alarm have landed | the spec; AGENTS.md |
+| 6. The depth task and gate | **ITEM-225-PENDING.** G2 + P3 and P1 certified by item 223 on `7a604e22`, and retaken on `a8aa864a` by the main session, recorded in item 225; P6 by the closing rule, AI-driven, on the owner's ruling (`docs/demo/p6c-record.md`) | items 223 and 225; the record |
+| 7. Docs in the same PR | **SPEC3-PENDING.** **Not all landed at `a8aa864a`**: none of section 4.4's spec amendments (the spec is unchanged there since 2026-10-09), which `spec3`'s pull request (`docs/s3-spec`, number to follow) is landing before this one merges: section 3's Probation paragraph, section 8's licence, section 13's chips, vocabulary and meter, section 14's Survey post, section 16's fun-gate row, sections 3, 16 and 17's v0.1 and the S3 and S4 rows, section 19's memo copy. AGENTS.md section 3 rule 4's S3 client pieces and section 9 item 11's authoring alarm have landed | the spec; AGENTS.md |
 | 8. The owner reviews the demo | this review | the owner |
 
 ## Found while writing this sheet
 
-- **#255 merged after this sheet's commit** (`a8aa864a`). In shipped code it changes the text of two
-  internal errors in `crates/gateway/src/serve.rs` (the control pipe failing) and one rules-load
-  refusal in `crates/sim/src/attack.rs`; the rest is tests. None is on a timed path or in the demo's
-  match. *Class:* engineering: decide; the lane's reading is that item 223's runs stand and the zip
-  stands for the demo, its three messages carrying the stray line break #255 removes.
+- **#255 merged after the sheet's first commit** (`5e62ba7`). In shipped code it changes the text of
+  two internal errors in `crates/gateway/src/serve.rs` (the control pipe failing) and one rules-load
+  refusal in `crates/sim/src/attack.rs`; the rest is tests. The main session ruled (engineering:
+  decided) that item 223's condition holds by its letter, so the sheet was moved to `a8aa864a`, the zip
+  rebuilt on it and the certifying runs retaken on it (item 225).
 - **AGENTS.md section 7** says the playtest bundle contains "survey, metrics, recording and the
   diagnostics log"; the bundle holds `manifest.json`, `survey.json`, `metrics.json` and
   `diagnostics.log`, and no recording (`the_bundle_holds_exactly_its_four_entries`). AGENTS.md is a

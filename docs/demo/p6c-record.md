@@ -14,9 +14,9 @@ AGENTS.md section 10 item 6's P6 part is met only on that ruling.
 
 ## The build
 
-- The zip: `D:/build/demo3/pharmakos-s3-5e62ba74-windows-x86_64.zip` (`docs/demo/s3-run-sheet.md`,
-  "Before you start", has its size, entry count and SHA-256), built by `cargo xtask package` from `main`
-  at `5e62ba7473e3a294c96401e52916fb1e9b87335d`, rules hash `641055eb0d38815a` (rules revision 8, the
+- The zip: `D:/build/demo3/pharmakos-s3-a8aa864a-windows-x86_64.zip`, 120 357 327 bytes, 27 entries,
+  SHA-256 `12b47f3f1c220873ebcca2212f023927e6a8689a5e98ba15c4139321d74d2a08`, built by `cargo xtask
+  package` from `main` at `a8aa864a88f2a7ef7129d36d381c994b58502c8e` (the demo's tree), rules hash `641055eb0d38815a` (rules revision 8, the
   final rules). It holds `fixp` (#211), on which the typing clause is read.
 - The match: the lobby's **Probation** preset ("New match: Probation"), seat 0 against Easy on seed 20,
   untimed Lulls. Started as `Pharmakos.exe` (the rule needs round 1 only).
