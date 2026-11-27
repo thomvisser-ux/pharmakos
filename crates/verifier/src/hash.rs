@@ -63,7 +63,7 @@ use pharmakos_proto::fingerprint::canonical_input;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::gp::v1::Playbook;
 use pharmakos_proto::json;
-use pharmakos_sim::encoding::Enc;
+use pharmakos_sim::encoding::{Enc, StreamingDigest};
 
 use crate::scope::Scope;
 
@@ -120,15 +120,14 @@ pub fn too_long_report_hash(
     verifier_version: &str,
     depth: Depth,
 ) -> Result<u64, HashError> {
-    let mut enc = inputs(
+    let inputs = inputs(
         Subject::TooLong,
         snapshot,
         scope,
         rules_hash,
         verifier_version,
     )?;
-    enc.i32(i32::from(depth));
-    Ok(enc.finish())
+    Ok(at_depth(&inputs, depth))
 }
 
 /// The report hash over the five inputs.
@@ -149,16 +148,14 @@ pub fn report_hash(
     verifier_version: &str,
     depth: Depth,
 ) -> Result<u64, HashError> {
-    let mut enc = inputs(
+    let inputs = inputs(
         Subject::Playbook(playbook),
         snapshot,
         scope,
         rules_hash,
         verifier_version,
     )?;
-    // 5. the depth
-    enc.i32(i32::from(depth));
-    Ok(enc.finish())
+    Ok(at_depth(&inputs, depth))
 }
 
 /// The report hash at each of the two depths a report can be produced at,
@@ -168,9 +165,10 @@ pub fn report_hash(
 /// input that has no encoding is refused when it is assembled, with a typed
 /// error, rather than discovered half-way through a report that has nowhere to
 /// put it. Each is built by the same function [`report_hash`] builds its bytes
-/// with, so the bytes each hash is over are exactly [`report_hash`]'s; the
-/// cost is a second encoding of the inputs, which are a playbook and a
-/// snapshot, per assembled input.
+/// with, so the bytes each hash is over are exactly [`report_hash`]'s. The
+/// first four inputs are digested once and the digest's state copied for the
+/// second depth, so the playbook and the snapshot, which at the size budget
+/// are near a megabyte, are read once and never copied.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct ReportHashes {
     quick: u64,
@@ -190,13 +188,10 @@ impl ReportHashes {
         rules_hash: u64,
         verifier_version: &str,
     ) -> Result<ReportHashes, HashError> {
-        let mut full = inputs(subject, snapshot, scope, rules_hash, verifier_version)?;
-        let mut quick = inputs(subject, snapshot, scope, rules_hash, verifier_version)?;
-        full.i32(i32::from(Depth::Full));
-        quick.i32(i32::from(Depth::Quick));
+        let inputs = inputs(subject, snapshot, scope, rules_hash, verifier_version)?;
         Ok(ReportHashes {
-            quick: quick.finish(),
-            full: full.finish(),
+            quick: at_depth(&inputs, Depth::Quick),
+            full: at_depth(&inputs, Depth::Full),
         })
     }
 
@@ -210,26 +205,38 @@ impl ReportHashes {
     }
 }
 
-/// The domain separator and the first four inputs, in order.
+/// The fifth input, the depth, after the first four: the report hash.
+fn at_depth(inputs: &StreamingDigest, depth: Depth) -> u64 {
+    let mut digest = inputs.clone();
+    let mut part = Enc::with_capacity(4);
+    // 5. the depth
+    part.i32(i32::from(depth));
+    digest.update(part.body());
+    digest.finish()
+}
+
+/// The domain separator and the first four inputs, in order, digested.
+///
+/// The bytes are the ones one [`Enc`] would build whole (the test
+/// `the_streamed_inputs_are_the_whole_buffers_bytes` holds them to it): the
+/// parts between the two large byte strings are written by the one encoder
+/// and handed to the digest, [`Enc::as_bytes`] for the first, which carries
+/// the encoding's version byte, and [`Enc::body`] for the later ones; the
+/// playbook and the snapshot are handed over as they stand. So nothing here
+/// holds a copy of either, and each is read once.
 fn inputs(
     subject: Subject<'_>,
     snapshot: &[u8],
     scope: &Scope,
     rules_hash: u64,
     verifier_version: &str,
-) -> Result<Enc, HashError> {
-    // The capacity is a hint and nothing reads it back, so its sum saturating
-    // could cost a reallocation and never a byte of the encoding.
+) -> Result<StreamingDigest, HashError> {
     let playbook = match subject {
         Subject::Playbook(bytes) => bytes,
         Subject::TooLong => &[],
     };
-    let mut enc = Enc::with_capacity(
-        playbook
-            .len()
-            .saturating_add(snapshot.len())
-            .saturating_add(128),
-    );
+    let mut digest = StreamingDigest::new();
+    let mut enc = Enc::with_capacity(128);
     match subject {
         Subject::Playbook(_) => {
             append_bytes(&mut enc, "the domain separator", REPORT_HASH_DOMAIN)?;
@@ -244,9 +251,15 @@ fn inputs(
         }
     }
     // 1. the playbook bytes
-    append_bytes(&mut enc, "the playbook", playbook)?;
+    enc.len(length("the playbook", playbook.len())?);
+    digest.update(enc.as_bytes());
+    digest.update(playbook);
     // 2. the snapshot bytes, then the seat's view of them
-    append_bytes(&mut enc, "the snapshot", snapshot)?;
+    enc.clear();
+    enc.len(length("the snapshot", snapshot.len())?);
+    digest.update(enc.body());
+    digest.update(snapshot);
+    enc.clear();
     scope.encode(&mut enc)?;
     // 3. the rules table
     enc.u64(rules_hash);
@@ -256,7 +269,8 @@ fn inputs(
         "the verifier version",
         verifier_version.as_bytes(),
     )?;
-    Ok(enc)
+    digest.update(enc.body());
+    Ok(digest)
 }
 
 /// The canonical JSON of a playbook, for a caller that wants the bytes the
@@ -328,9 +342,13 @@ fn append_bytes(enc: &mut Enc, what: &'static str, bytes: &[u8]) -> Result<(), H
 
 #[cfg(test)]
 mod tests {
-    use super::{HashError, ReportHashes, Subject, length, report_hash};
+    use super::{
+        HashError, REPORT_HASH_DOMAIN, ReportHashes, Subject, TOO_LONG_REPORT_DOMAIN, length,
+        report_hash, too_long_report_hash,
+    };
     use crate::scope::Scope;
     use pharmakos_proto::gp::api::v1::verify_plan::Depth;
+    use pharmakos_sim::encoding::Enc;
     use pharmakos_sim::knowledge::SeatEconomy;
     use pharmakos_sim::tables::SeatId;
 
@@ -365,5 +383,84 @@ mod tests {
         }
         assert_eq!(both.at(Depth::Unspecified), both.at(Depth::Full));
         assert_ne!(both.at(Depth::Quick), both.at(Depth::Full));
+    }
+
+    /// The report hash's bytes built whole by one encoder, as the hash was
+    /// computed until the inputs were streamed: the reference the streamed
+    /// digest is held to.
+    fn whole_buffer(
+        subject: Subject<'_>,
+        snapshot: &[u8],
+        scope: &Scope,
+        rules_hash: u64,
+        verifier_version: &str,
+        depth: Depth,
+    ) -> u64 {
+        let mut enc = Enc::with_capacity(0);
+        let put = |enc: &mut Enc, bytes: &[u8]| {
+            enc.len(u32::try_from(bytes.len()).expect("a test's bytes fit the prefix"));
+            enc.bytes(bytes);
+        };
+        match subject {
+            Subject::Playbook(playbook) => {
+                put(&mut enc, REPORT_HASH_DOMAIN);
+                put(&mut enc, playbook);
+            }
+            Subject::TooLong => {
+                put(&mut enc, TOO_LONG_REPORT_DOMAIN);
+                enc.u64(u64::try_from(crate::MAX_PLAYBOOK_CHARS).expect("the cap fits a u64"));
+                put(&mut enc, &[]);
+            }
+        }
+        put(&mut enc, snapshot);
+        scope
+            .encode(&mut enc)
+            .expect("a small view has an encoding");
+        enc.u64(rules_hash);
+        put(&mut enc, verifier_version.as_bytes());
+        enc.i32(i32::from(depth));
+        enc.finish()
+    }
+
+    /// Streaming the inputs moved no hash: for empty, small and megabyte
+    /// inputs, at each depth and for `E0029`'s subject, the streamed digest
+    /// is the digest of the bytes one encoder builds whole.
+    #[test]
+    fn the_streamed_inputs_are_the_whole_buffers_bytes() {
+        let scope = Scope::new(SeatId::new(2), SeatEconomy::default());
+        let large: Vec<u8> = (0..1_000_003_u32).map(|n| n.to_le_bytes()[0]).collect();
+        let playbooks: [&[u8]; 4] = [b"", b"{}", b"{\"meta\":{}}", &large];
+        let snapshots: [&[u8]; 3] = [b"", b"snapshot", &large];
+        for depth in [Depth::Quick, Depth::Full] {
+            for snapshot in snapshots {
+                for playbook in playbooks {
+                    assert_eq!(
+                        report_hash(playbook, snapshot, &scope, 7, "0.1.0-test", depth),
+                        Ok(whole_buffer(
+                            Subject::Playbook(playbook),
+                            snapshot,
+                            &scope,
+                            7,
+                            "0.1.0-test",
+                            depth
+                        )),
+                        "a playbook of {} bytes and a snapshot of {}",
+                        playbook.len(),
+                        snapshot.len()
+                    );
+                }
+                assert_eq!(
+                    too_long_report_hash(snapshot, &scope, 9, "0.1.0-test", depth),
+                    Ok(whole_buffer(
+                        Subject::TooLong,
+                        snapshot,
+                        &scope,
+                        9,
+                        "0.1.0-test",
+                        depth
+                    ))
+                );
+            }
+        }
     }
 }

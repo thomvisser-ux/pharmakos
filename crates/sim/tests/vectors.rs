@@ -446,6 +446,42 @@ fn the_streaming_digest_answers_the_pinned_digests() {
     }
 }
 
+/// An encoding written part by part is the encoding written whole: the first
+/// part's [`Enc::as_bytes`], then a byte string handed over as it stands, then
+/// a later part's [`Enc::body`], digested in turn, answer the digest of one
+/// encoder that built all of it. `body` is the bytes less the version byte,
+/// empty on a fresh or cleared encoder.
+#[test]
+fn an_encoding_streamed_in_parts_is_the_encoding_built_whole() {
+    let fresh = Enc::with_capacity(0);
+    assert_eq!(fresh.as_bytes(), [ENCODING_VERSION]);
+    assert!(fresh.body().is_empty());
+
+    let payload = b"a byte string handed over as it stands";
+    let length = u32::try_from(payload.len()).expect("a short string");
+
+    let mut whole = Enc::with_capacity(0);
+    whole.len(length);
+    whole.bytes(payload);
+    whole.u64(7);
+    whole.i32(-3);
+
+    let mut part = Enc::with_capacity(0);
+    part.len(length);
+    let mut streamed = StreamingDigest::new();
+    streamed.update(part.as_bytes());
+    streamed.update(payload);
+    part.clear();
+    assert!(part.body().is_empty(), "a cleared encoder has no body");
+    part.u64(7);
+    part.i32(-3);
+    assert_eq!(part.body().len(), 12);
+    streamed.update(part.body());
+
+    assert_eq!(streamed.finish(), whole.finish());
+    assert_eq!(streamed.finish(), digest(whole.as_bytes()));
+}
+
 /// `bytes` handed to a streaming digest in pieces of the lengths `sizes`
 /// gives in turn (a zero is an empty write), the last piece whatever is left.
 fn streamed(bytes: &[u8], mut sizes: impl FnMut() -> usize) -> u64 {
