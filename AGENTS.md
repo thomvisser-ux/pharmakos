@@ -742,8 +742,10 @@ of that premise.
   after its closing brace on that line is read) (decisions-log items 178 (10), 183 and 202). So: make every new thread in
   `gamectl` and the gateway through `player_text_thread` (decisions-log items 167 (6) and 168).
 - **No network telemetry.** Playtest mode is opt-in and local: "Export playtest bundle" writes a
-  file the tester sends manually, containing survey, metrics, recording and the diagnostics log
-  only — never playbooks, drafts, the notebook or the private replay. Networked telemetry is
+  file the tester sends manually, containing the survey, metrics and the diagnostics log only,
+  and no recording until S7 builds recordings, as its manifest says (S3's plan, decision 11;
+  decisions-log items 154 (4) and 200) — never playbooks, drafts, the notebook or the private
+  replay. Networked telemetry is
   roadmap and needs opt-in; do not add an HTTP client to any shipped crate.
 - **Never commit keys or tokens.** No API keys, no seat tokens, no signing certificates, no
   `.env` with secrets. Seat tokens are generated per match and live in the private match cache;
