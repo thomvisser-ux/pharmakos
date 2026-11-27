@@ -331,7 +331,8 @@ pub struct BreachProbe {
     pub holding_breach: u64,
 }
 
-/// One breach search, run [`BREACH_RUNS`] times.
+/// One breach search, run several times.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct TimedSearch {
     /// The fastest run, in nanoseconds.
     ns: u128,
@@ -341,33 +342,32 @@ struct TimedSearch {
     expanded: u32,
 }
 
-/// Run one breach search [`BREACH_RUNS`] times, read only, keeping the fastest
-/// run's time. The search is a pure function of the world and the way, so
-/// runs that disagree on the expansions they spent are refused, in words.
-fn time_search(
-    world: &World,
-    scratch: &mut BreachScratch,
-    seat: SeatId,
-    way: SealedWay,
-) -> Result<TimedSearch, String> {
+/// One run of a search: its time, what it answered and the states it expanded.
+type SearchRun = (u128, Result<(), BreachRefused>, u32);
+
+/// Run one search `runs` times, keeping the fastest run's time. The search is
+/// a pure function of the world and the way, so its runs answer alike and
+/// expand the same states.
+///
+/// # Errors
+///
+/// [`Error::Empty`] for no run at all, and [`Error::Drift`] when two runs
+/// disagree on the answer or on the states expanded.
+fn fastest_of(runs: usize, mut run: impl FnMut() -> SearchRun) -> Result<TimedSearch, Error> {
     let mut kept: Option<TimedSearch> = None;
-    for _ in 0..BREACH_RUNS {
-        let started = Instant::now();
-        let found = breach_search(world, scratch, seat, way);
-        let ns = started.elapsed().as_nanos();
-        let expanded = scratch.expansions();
-        let outcome = found.map(|_| ());
+    for _ in 0..runs {
+        let (ns, outcome, expanded) = run();
         kept = Some(match kept {
-            Some(before) if before.expanded != expanded => {
-                return Err(format!(
-                    "a breach search expanded {expanded} states on one run and {} on another",
-                    before.expanded
-                ));
+            Some(before) if before.expanded != expanded || before.outcome != outcome => {
+                return Err(Error::Drift(format!(
+                    "a breach search answered {outcome:?} over {expanded} states on one run and \
+                     {:?} over {} on another",
+                    before.outcome, before.expanded
+                )));
             }
             Some(before) => TimedSearch {
                 ns: before.ns.min(ns),
-                outcome,
-                expanded,
+                ..before
             },
             None => TimedSearch {
                 ns,
@@ -376,12 +376,32 @@ fn time_search(
             },
         });
     }
-    kept.ok_or_else(|| "a breach search ran no time".to_owned())
+    kept.ok_or_else(|| Error::Empty("a breach search ran no time".to_owned()))
 }
 
 impl BreachProbe {
     /// Book one timed search: its outcome, its time and its expansions.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Drift`] when the count is not the one its answer means: the
+    /// heap's room is never the limit (`BREACH_HEAP`'s rule), so a search is
+    /// exhausted exactly when it read one past [`BREACH_EXPANSIONS`], and no
+    /// search reads further. [`Error::Overflow`] for a sum past its type.
     fn book(&mut self, search: &TimedSearch) -> Result<(), Error> {
+        let spent_the_bound = search.expanded > BREACH_EXPANSIONS;
+        let exhausted = search.outcome == Err(BreachRefused::Exhausted);
+        let past_bound = BREACH_EXPANSIONS
+            .checked_add(1)
+            .ok_or(Error::Overflow("the breach search's bound"))?;
+        if spent_the_bound != exhausted || search.expanded > past_bound {
+            return Err(Error::Drift(format!(
+                "a breach search answered {:?} over {} states, against a bound of \
+                 {BREACH_EXPANSIONS}: a search is exhausted exactly when it reads one past its \
+                 bound",
+                search.outcome, search.expanded
+            )));
+        }
         let tally = match search.outcome {
             Ok(()) => &mut self.found,
             Err(BreachRefused::Exhausted) => &mut self.exhausted,
@@ -476,9 +496,18 @@ fn probe_breach(world: &World, minute: u64) -> Result<BreachProbe, Error> {
                 .sealed
                 .checked_add(1)
                 .ok_or(Error::Overflow("sealed ways"))?;
-            let search = time_search(world, &mut scratch, SeatId::new(*seat), way)
-                .map_err(|why| Error::Drift(format!("from {at:?} to {core:?}: {why}")))?;
-            probe.book(&search)?;
+            let search = fastest_of(BREACH_RUNS, || {
+                let started = Instant::now();
+                let found = breach_search(world, &mut scratch, SeatId::new(*seat), way);
+                let ns = started.elapsed().as_nanos();
+                (ns, found.map(|_| ()), scratch.expansions())
+            })
+            .and_then(|search| probe.book(&search))
+            .map_err(|error| match error {
+                Error::Drift(why) => Error::Drift(format!("from {at:?} to {core:?}: {why}")),
+                other => other,
+            });
+            search?;
         }
     }
     Ok(probe)
@@ -988,6 +1017,93 @@ mod tests {
             breach: Vec::new(),
             sim_refused: (0, 0),
             chain_digest: 4,
+        }
+    }
+
+    /// The fastest run's time is kept, with the answer and the count every
+    /// run gave; no run at all is `Empty`, and runs that disagree on the
+    /// count or on the answer are `Drift`.
+    #[test]
+    fn a_timed_search_keeps_its_fastest_run_and_refuses_runs_that_disagree() {
+        let mut runs = [(9, Ok(()), 40), (4, Ok(()), 40), (7, Ok(()), 40)].into_iter();
+        let search = fastest_of(3, || runs.next().expect("three runs")).expect("runs that agree");
+        assert_eq!(
+            search,
+            TimedSearch {
+                ns: 4,
+                outcome: Ok(()),
+                expanded: 40
+            }
+        );
+        assert!(matches!(
+            fastest_of(0, || (1, Ok(()), 1)),
+            Err(Error::Empty(_))
+        ));
+        let mut counts = [(1, Ok(()), 40), (1, Ok(()), 41)].into_iter();
+        assert!(matches!(
+            fastest_of(2, || counts.next().expect("two runs")),
+            Err(Error::Drift(_))
+        ));
+        let mut answers = [(1, Ok(()), 40), (1, Err(BreachRefused::NoWay), 40)].into_iter();
+        assert!(matches!(
+            fastest_of(2, || answers.next().expect("two runs")),
+            Err(Error::Drift(_))
+        ));
+    }
+
+    /// A probe books each search's answer, its time and its count: the most
+    /// one search expanded and their sum, the slowest and the summed time.
+    #[test]
+    fn a_probe_books_the_most_and_the_sum_of_its_searches() {
+        let past_bound = BREACH_EXPANSIONS.checked_add(1).expect("the bound fits");
+        let mut probe = BreachProbe::default();
+        for (ns, outcome, expanded) in [
+            (5, Ok(()), 30),
+            (9, Err(BreachRefused::NoWay), 70),
+            (2, Err(BreachRefused::Exhausted), past_bound),
+            (3, Ok(()), 10),
+        ] {
+            probe
+                .book(&TimedSearch {
+                    ns,
+                    outcome,
+                    expanded,
+                })
+                .expect("a search whose count is its answer's");
+        }
+        assert_eq!((probe.found, probe.no_way, probe.exhausted), (2, 1, 1));
+        assert_eq!((probe.slowest_ns, probe.total_ns), (9, 19));
+        assert_eq!(probe.most_expansions, past_bound);
+        assert_eq!(probe.total_expansions, u64::from(past_bound) + 110);
+    }
+
+    /// A count that is not its answer's is refused, not booked: exhausted
+    /// under the bound, an answer past it, and any count further than one
+    /// past the bound.
+    #[test]
+    fn a_probe_refuses_a_count_that_is_not_its_answers() {
+        let past_bound = BREACH_EXPANSIONS.checked_add(1).expect("the bound fits");
+        for (outcome, expanded) in [
+            (Err(BreachRefused::Exhausted), BREACH_EXPANSIONS),
+            (Err(BreachRefused::Exhausted), 0),
+            (Ok(()), past_bound),
+            (Err(BreachRefused::NoWay), past_bound),
+            (
+                Err(BreachRefused::Exhausted),
+                past_bound.checked_add(1).expect("fits"),
+            ),
+        ] {
+            let mut probe = BreachProbe::default();
+            let booked = probe.book(&TimedSearch {
+                ns: 1,
+                outcome,
+                expanded,
+            });
+            assert!(
+                matches!(booked, Err(Error::Drift(_))),
+                "{outcome:?} over {expanded}"
+            );
+            assert_eq!(probe, BreachProbe::default(), "nothing is booked");
         }
     }
 

@@ -12,7 +12,6 @@
 # each sentence with its chips drawn as links, the duration dim, and a conflict connector
 # joining the route's second step and the rule, as a W0702 row would name them.
 #
-#
 # COMPARED: `cargo xtask screenshot` renders it and compares it with
 # `tests/golden/vista/expected.rule_list.png` (`xtask`'s SHOTS, from S3's `cert3`). It can also
 # be run by hand (godot/README.md), and without `--shot=` it is a smoke test that draws the

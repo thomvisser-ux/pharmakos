@@ -13,12 +13,10 @@
 # reason beside them. The shot opens the first family that holds a locked entry, and the first
 # predicate under it that can be picked, so one locked entry and its reason are on screen.
 #
-#
 # COMPARED: `cargo xtask screenshot` renders it and compares it with
 # `tests/golden/vista/expected.picker.png` (`xtask`'s SHOTS, from S3's `cert3`). It can also
 # be run by hand (godot/README.md), and without `--shot=` it is a smoke test that draws the
-# picker, checks a
-# locked entry is drawn with its reason and cannot be picked, and quits.
+# picker, checks a locked entry is drawn with its reason and cannot be picked, and quits.
 #
 #     godot --path godot --resolution 1280x720 -- --scene=res://scenes/picker_shot.tscn --shot=<png>
 #
