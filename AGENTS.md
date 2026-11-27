@@ -29,7 +29,7 @@ spikes are closed, frozen at the `spike-end` tag and deleted from `main`;
 their measured results and their lessons for the skeleton live under `docs/spikes/`, and reading the
 spike code means `git worktree add ../pharmakos-spikes spike-end`. The walking skeleton is closed
 (decisions-log item 126, 2026-09-29), S1 is closed (decisions-log items 139 and 143, 2026-10-16), S2 is
-closed (decisions-log item 155, 2026-10-28), S3 is closed (decisions-log item 226, 2026-11-27), the stage that follows S3 is being re-planned (decisions-log item 226), and every crate in §3 has code; mark any value
+closed (decisions-log item 155, 2026-10-28), S3 is closed (decisions-log item 226, 2026-11-27), the stage that follows S3 is S4 "Signals", whose first half is "the three towers" (decisions-log item 227), and every crate in §3 has code; mark any value
 you had to guess with a `PLACEHOLDER` comment naming who fixes it and when.
 
 ---
@@ -54,9 +54,22 @@ a match replays bit-for-bit on every platform.
 
 Three levels of behaviour ship built-in and native: the commander's **operator** (generates a
 playbook, files the safe playbook on a miss, executes whatever the seat sealed), the beacons'
-**mandates**, and the units' and buildings' **programs**. The player authors exactly one thing: the
-playbook, a JSONC file (canonical `gp.v1` proto JSON plus comments) written in the in-game editor or
-by hand.
+**mandates**, and the units' and buildings' **programs**. Programs are built in until S4's rule
+cards; from then they are authored as rule cards, each with a built-in default (the basic tower's,
+decisions-log item 227, point 36). The player authors exactly one thing, until S4's rule cards
+(decisions-log item 227): the playbook, a JSONC file (canonical `gp.v1` proto JSON plus comments)
+written in the in-game editor or by hand.
+
+**Rule cards** are decided as the form in which a unit's or a structure's program is authored
+(decisions-log item 227, the owner's points 20, 28 and 36; point 28's picked option says "AGENTS.md
+is amended to say programs are authored as data"): typed data with a closed vocabulary, checked by
+the verifier before the Push, bounded in size and cost, guaranteed to finish, and never text that
+executes. Every ban below stands: no script engine, no script runtime, no interpreter for user
+text; on the main session's reading of point 28's boundary (the owner can veto), a rule card is
+data the Rust sim interprets, as a playbook is. Real code stays out until the cards are proven, and
+then arrives only as another way to write the same tables. Rule cards are not yet built: the first
+build is towers only, in the three towers, the first half of S4 (§10; the owner did not pick
+"Towers and units together", point 36).
 
 Consequences that bind every change you make:
 
@@ -642,14 +655,41 @@ request and the owner reviews the stage demo.
   git worktree remove ../pharmakos-<task>     # when the PR is merged
   ```
 
-- **One crate, one agent.** Two agents never edit the same crate at the same time. If your task
-  needs a change in a crate another agent owns right now, stop and ask for the change to be
-  sequenced — do not "just add a small helper" over there. By the owner's word of 2026-11-23
-  (decisions-log item 183), for the rest of S3 two lanes may work in one crate at the same time
-  when their briefs name disjoint files. Under that word, each lane's brief lists its files, a file
-  both need is sequenced as above, merges stay one at a time, and the later lane takes `main` by a
-  signed merge and re-runs the full check. That word ran to S3's close (decisions-log item 226),
-  and whether it is renewed is the owner's. A task granted a *named place* in a
+- **Reviews by risk** (decisions-log item 227, the owner's point 30: two reviews for the sim,
+  determinism code, the wire format, security or a contract file, otherwise one). The classes'
+  definitions below, and "with different lenses", are the main session's (**decided; the owner can
+  veto**). A pull request gets two adversarial reviews with different lenses when its diff touches
+  any of:
+  - the sim and its data: `crates/sim/**`, `rules/**`, a golden's content under `tests/golden/**`
+    (a re-bless) or a scenario's expected chain;
+  - the wire format: `proto/**` and `crates/proto/**`;
+  - security, which is all of §7 (the secrecy of playbooks, drafts and the cache; no filesystem or
+    network access through playbooks; no telemetry; keys and tokens; the gateway's tokens, scopes,
+    fog filter, limits, bind and upgrade checks: among them `crates/gateway/src/{token,scopes,fog,
+    limit,net,handshake,frame,rpc,cache,audit}.rs`), and every decoder of untrusted input: the
+    playbook load and JSONC read in plan-core (`crates/plan-core/src/jsonc.rs`) and the verifier's
+    decode (`crates/verifier/src/decode.rs`), `chunk_rle`, the client's decoders of gateway answers
+    (among them `crates/client-gdext/src/{api,transport,view,variant}.rs`), and the save and
+    config-line readers (`crates/gateway/src/save.rs`, `serve.rs`'s `ConfigLine`);
+  - any contract path of §5, with `xtask/**` whole, `.github/**`, and the root `Cargo.toml` and
+    `Cargo.lock` (a dependency change is supply chain).
+
+  Any other pull request gets one. Dependabot's pull requests keep the two reviews CLAUDE.md gives
+  them (decisions-log item 120). A lane may be a whole vertical slice across crates, and its review
+  count is set by its riskiest path. The pull request's body states its review count and the
+  riskiest path that set it, and the main session checks that at the merge; a fix pass that touches
+  a higher class than the pull request had gets the second review before it merges.
+- **One crate, one agent, unless their files are disjoint.** Two agents never edit the same crate
+  at the same time, except that two lanes may work in one crate at the same time when their briefs
+  name disjoint files (decisions-log item 227, which makes item 183's word for S3 a standing rule).
+  Under that rule, each lane's brief lists its files, a file both need is sequenced as below, merges
+  stay one at a time, and the later lane takes `main` by a signed merge and re-runs the full check.
+  **Ownership is by file:** a lane owns the files its brief names, and a crate with one lane in it
+  is owned whole, as before; wherever this section says a lane or an agent owns a crate, read it so.
+  The files most lanes need — the crate's `src/lib.rs`, its `Cargo.toml`, a confinement test's
+  `SOURCES` line — are shared files and are sequenced.
+  If your task needs a file another agent owns right now, stop and ask for the change to be
+  sequenced — do not "just add a small helper" over there. A task granted a *named place* in a
   crate it does not own (a module, or a few named lines) is granted that crate's confinement-test
   line with it wherever the test lists the crate's sources by name, and the grant says so:
   `every_module_is_checked` in `crates/gamectl/tests/confinement.rs` fails on any `mod name;` that a
@@ -696,7 +736,7 @@ request and the owner reviews the stage demo.
   whose checks passed, never by a rebase or a squash; `scripts/merge-train.sh` does both halves
   (decisions-log item 145 (3)). Never force-push `main`. The remedy for an unsigned commit, which
   never rewrites a pushed branch, is in §8.
-- State in the PR which crates you touched, so the next agent can pick a disjoint set.
+- State in the PR which crates and files you touched, so the next agent can pick a disjoint set (by file where a crate is shared).
 - Agents iterate until CI is green on their own branch; the owner reviews the stage demo, not the
   intermediate commits.
 
@@ -716,9 +756,9 @@ of that premise.
 - **Secrecy.** Playbooks, drafts, the seat notebook and the private replay cache never leave the
   gateway for another seat. On a local host this is enforcement, not cryptography: the private match
   cache is plain local state, and the spec says so out loud. Do not claim more.
-- **No filesystem or network access through playbooks.** A playbook is data with a closed
-  vocabulary. There is no verb that reads a path, opens a socket, shells out or loads code, and none
-  may be added. The template/sample library is a local folder the gateway *reads* to list and
+- **No filesystem or network access through playbooks or rule cards.** A playbook is data with a
+  closed vocabulary, and so is a rule card (§2, decisions-log item 227). There is no verb that reads
+  a path, opens a socket, shells out or loads code, in either, and none may be added. The template/sample library is a local folder the gateway *reads* to list and
   instantiate; nothing in it executes.
 - **A player's text is quoted wherever a person is shown it.** Where a person is shown a sentence
   built by `proto`, `plan-core`, the verifier or the gateway, a player's text in it is quoted:
@@ -755,9 +795,12 @@ of that premise.
 - **Never run an agent in bypass-permissions mode against a real seat**, and do not use it in this
   repository. The contract-file rule in §5 depends on approval prompts actually happening. Game
   tools are reached through pre-approved allow rules; bypass mode is not a shortcut, it is the
-  removal of the mechanism. The owner's one exception, for the walking skeleton, S1, S2, S3 and the stage
-  that follows S3 only, is in CLAUDE.md: bypass mode in the owner's own session and the agents it
-  launches, never against a real seat (decisions-log items 86, 116 (9), 126, 141, 152 and 226).
+  removal of the mechanism. The owner's one exception, for the walking skeleton, S1, S2, S3 and S4
+  only (through S4 to S4's stage demo: the main session's reading of item 226 (4) after the re-cut,
+  **decided; the owner can veto**), is in CLAUDE.md: bypass mode in the owner's own session and the
+  agents it launches, never against a real seat (decisions-log items 86, 116 (9), 126, 141, 152,
+  226 and 227). "A real seat" is not yet defined here; the AI play harness's lane brings the
+  definition to the owner before it builds (decisions-log item 227).
 - Rate limits, an audit log and message bounds on the gateway are part of the feature, not a later hardening task.
   A request is within `MAX_MESSAGE_BYTES`, and a message past it closes the connection with close code 1009; its `id` is within `MAX_ID_BYTES`, and one past it is an Invalid Request answered under no id. Neither is `RESPONSE_TOO_LARGE`, which is only for an answer. An answer is within
   `MAX_ANSWER_BYTES` or is the typed refusal `RESPONSE_TOO_LARGE`, sent in its place and never a cut text, with the
@@ -1087,10 +1130,22 @@ view), and is done only when all of this holds:
 7. Docs updated in the same PR: this file if a rule changed, `docs/design/` if a decision changed.
 8. The owner reviews the stage demo. That review, not CI, is what ends the stage.
 
-The pre-gate ladder, for orientation: spikes (wk 3) → walking skeleton (18.5) → S1 economy (23.5) →
-S2 destruction & combat (29.5) → S3 authoring (34.5) → **the fun gate and, on the owner's go verdict, the public v0.1 (35.5; decisions-log item 154 (3))** →
-S4 radio/licences/symmetric map (41.5) → S5 operators (45.5) → S6 editor & library (53) → S7 watch &
-share (57.5) → hardening → **v1 (63.5)**.
+The ladder, for orientation: spikes (wk 3) → walking skeleton (18.5) → S1 economy (23.5) →
+S2 destruction & combat (29.5) → S3 authoring (34.5; closed, decisions-log item 226) →
+**S4 "Signals"** (sensing, friend-or-foe, radio marks, fog, then radio warfare; was radio and
+licences), whose first half is "the three towers", the first build of rule cards (§2) → S5
+"Commanders" → S6 "Library" → S7 "Watch and share" → hardening → **v1** (decisions-log item 227).
+The AI play harness (the owner's point 38) is built before the towers slice; it is a lane, not a
+milestone. Each stage after S4 is named only, and is detailed when the one before it closes. The
+stages keep their slots (point 37) and the previous ladder is not thrown away (point 12): each
+stage's earlier contents, such as S4's symmetric three-way generator, the award fund and P7, S5's
+P2 and Normal and Hard, S6's full editor and S7's scrub and casual mode, are **carried inputs,
+re-placed when that stage is detailed**. **The fun gate** moves to after the first new-core
+milestone (decisions-log items 226 (5) and 227). **The public v0.1**'s build and its place are
+held with the versioning scheme, the owner's to rule: point 31 holds the rc until that scheme
+names the build, and item 154 (3) ties v0.1.0 to the rc's commit. Only the week numbers after S3
+are history: they are dropped, and dates are re-estimated per stage; the week numbers up to S3
+stand as the record.
 
 ## 11. What not to build in v1
 
@@ -1099,7 +1154,8 @@ most of them have a reserved proto seam waiting — filling the seam early is th
 
 - **No script runtime or script language.** No QuickJS/`rquickjs`, Boa, Luau, Lua, `wasmi`, WASM
   operators, or a custom mini-language. Nothing user-written executes. (v1.1 runs scripts
-  *outside* the game; the in-game runtime is later still.)
+  *outside* the game; the in-game runtime is later still.) Rule cards (§2) are data, like
+  playbooks, and not a script language (decisions-log item 227, point 28).
 - **No MCP server**, no `rmcp`, no tool server of any kind.
 - **No SDK and no published API.** The Seat Gateway stays internal; `llms.txt`, `llms-full.txt`, the
   agent guide and published schema docs ship with v1.1.
@@ -1121,16 +1177,23 @@ most of them have a reserved proto seam waiting — filling the seam early is th
   (`crates/gamectl/tests/report_cap.rs`'s two checks of `MAX_PER_CODE` against
   `TAP_PROBE_LISTED_FLOOR` and `TAP_PROBE_VERIFIES`).
   A member name of the player's own too long for a pointer (`MAX_POINTER_BYTES`) is pointed at by
-  the object that holds it (decisions-log items 183 (4), "Cap all codes", 203 and 214).
+  the object that holds it (decisions-log items 183 (4), "Cap all codes", 203 and 214). The same
+  vocabulary rule binds rule cards when they arrive (§2, decisions-log item 227): their vocabulary
+  is closed and is what the editor renders, and Load rejects an out-of-vocabulary construct and
+  never strips it.
 - **No player Dispatches** or seat-to-seat text. v1 has one-way engine chatter only; no seat reads
   it.
 - Also out: human-vs-human, teams (`team_id` reserved), more than 3 seats, internet play, dedicated
-  servers, voting, the web spectator, the RL interface, flowing water, beacon capture, Citations,
+  servers, voting, the web spectator, the RL interface, flowing water, beacon capture (to be placed
+  when S4 closes, point 37), Citations,
   grid islands, batteries, reinforced wall/gate/shield block, timed weapons, operator personalities
   beyond Balanced, the director camera, the expert editor view (raw JSON, command palette) —
   selectors *do* ship in v1 — translation (English, one string table), the art pass, accelerated
   player-facing AI-only matches, and over-the-air attacks (interception, spoofing, jamming) with
-  their counters.
+  their counters (moved into S4 "Signals" by the owner's approval of the plan's shape, decisions-log
+  item 227, point 37; what of it S4 builds is S4's plan's, and nothing of it is built before that
+  plan). The two clauses on beacon capture and over-the-air attacks are the main session's wording
+  of the owner's point 37 (the owner can veto).
 
 ## 12. Working conventions
 
