@@ -39,7 +39,7 @@ inventing it (`AGENTS.md` §12).
 | `co-design-gameplan-api.md` | Playbook schema, verifier, gateway API and editor UX, co-designed in depth. | Normative in shape; superseded where §2.7 conflicts |
 | `s1-plan.md` | S1, the economy: the tasks, lanes, waves, re-bless ledger, P1 and the owner's decisions, all ruled (decisions-log item 128). | Closed with S1 (decisions-log item 143, 2026-10-16); its rulings stand |
 | `s2-plan.md` | S2, destruction and combat: the tasks, lanes, waves, re-bless ledger, the cut order, G3′-real and the owner's decisions (decisions-log item 144). | Closed with S2 (decisions-log item 155, 2026-10-28); its rulings stand |
-| `s3-plan.md` | S3, authoring: the tasks, lanes, waves, re-bless ledger, the cut order, G2 + P3, P1 FULL, P6 and the owner's decisions (drafted under decisions-log item 153, adopted under item 154). | Closed with S3 (decisions-log item 226, 2026-11-27); its rulings stand; the stage that follows S3 is being re-planned |
+| `s3-plan.md` | S3, authoring: the tasks, lanes, waves, re-bless ledger, the cut order, G2 + P3, P1 FULL, P6 and the owner's decisions (drafted under decisions-log item 153, adopted under item 154). | Closed with S3 (decisions-log item 226, 2026-11-27); its rulings stand; the stage that follows S3 is S4 "Signals", whose first milestone is "the three towers" (decisions-log item 227) |
 | `targeting.md` | How a playbook names where and what: names and descriptions, the three reading rules, "nearest", sites, the S1 slice (decisions-log item 127 (12)). | Current; the later decision where the spec differs |
 | `radar-lab-research.md` | The radar lab's research memo: monostatic, Doppler, bistatic and passive, and solar-illuminated radar, with published validation cases, the lab's architecture and a phased build plan (decisions-log items 138 (4) and 140); its appendix A, a reference script kept as text, reproduces its computed values. | Current: the radar lab's plan of record; its remaining operator questions open |
 | `handoff.md` | State of the design at the end of pass 6: what is decided, what is next, working conventions, the build plan in one line. Start here for orientation. | Current |
@@ -54,8 +54,12 @@ units' and buildings' **programs**. Everything the player touches is data: **pla
 templates as JSONC (canonical `gp.v1` proto JSON plus comments). No script runtime, no MCP, no SDK,
 no published API, no AI seats, no manual control. The Seat Gateway is internal but agent-shaped;
 script seams are reserved in the proto and never read. The sim is deterministic at 20 Hz on integer
-maths, hashed every tick. Build plan: 63.5 weeks, one gate at week 35.5 that also ships v0.1
-publicly, v1 at week 63.5.
+maths, hashed every tick. Build plan: through S3 as the spec's weeks; after S3, S4 "Signals",
+whose first milestone is "the three towers", then S5 "Commanders", S6 "Library", S7 "Watch and
+share", hardening and v1, each detailed when the one before it closes and dated per stage; the fun
+gate, which also ships v0.1 on the owner's go, moves to after the first new-core milestone
+(decisions-log item 227). From S4 a unit's or a structure's program is authored as rule cards,
+which are data like playbooks (item 227).
 
 Implementation rules — determinism, crate boundaries, contract files, security, commits, CI, the
 definition of done — are in [`../../AGENTS.md`](../../AGENTS.md), not here. Contribution mechanics

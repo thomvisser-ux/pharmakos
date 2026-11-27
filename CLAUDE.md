@@ -31,9 +31,9 @@ Read that file before your first edit. What follows is only the Claude Code-spec
    `docs/design/README.md`. The co-design doc predates the v1 simplification and still describes
    MCP tools, flags/branch/repeat, and a WASM planner — all of which are **not in v1**.
 3. **Confirm nobody else owns your crate.** At most four agents run at once (items 191 and 199), each in
-   its own git worktree, and two agents never edit the same crate, except that, by the owner's word (item 183), for the rest of S3
-   two lanes whose briefs name disjoint files may (AGENTS.md §6); that word ran to S3's close
-   (item 226), and whether it is renewed is the owner's.
+   its own git worktree, and two agents never edit the same crate, except that two lanes whose
+   briefs name disjoint files may, under AGENTS.md §6's conditions (item 227, which makes item 183's
+   word for S3 a standing rule).
 
 ## Stop and ask
 
@@ -59,10 +59,10 @@ Do not use bypass-permissions mode in this repository, and never against a real 
 contract-file rule depends on approval prompts actually happening; bypass mode removes the
 mechanism rather than speeding it up.
 
-**Owner's delegation for the walking skeleton, S1, S2, S3 and the stage that follows S3 (decisions-log
+**Owner's delegation for the walking skeleton, S1, S2, S3 and S4 (decisions-log
 §2.7 items 85, 86, 116 (2) and (9), and 120, from 2026-09-14; renewed for S1 by item 126 (2) (g),
 2026-09-29, for S2 by item 141, 2026-10-14, for S3 by item 152, 2026-10-28, and for the stage that
-follows S3 by item 226, 2026-11-27).** Two relaxations apply to the owner's own Claude Code session only (the
+follows S3 by item 226, 2026-11-27, that stage being S4 "Signals" by item 227).** Two relaxations apply to the owner's own Claude Code session only (the
 second also to the agents it launches), for the duration of the walking skeleton; of S1, which runs
 from the skeleton's close (item 126) to S1's stage demo; and of S2, which runs from S1's close (items
 139 and 143: S1 closed on 2026-10-16, when its last lane, `fixd`, had merged and `main`'s push run
@@ -70,10 +70,12 @@ on it was green) to S2's stage demo. They are revoked by the owner's word
 at any time. The owner made the renewal effective on its word of 2026-10-14, so there is no gap
 between S1's stage demo and S1's close (item 141 (1)). On 2026-10-28, with S2's demo ready, the owner
 said the delegation runs into S3 (item 152), so it ran on through S3 to S3's stage demo. At S3's
-stage demo review, on 2026-11-27, the owner renewed it (decisions-log item 226 (4)); its terms are
-unchanged until the owner approves a widening, and it now runs on through the stage that follows S3
-to that stage's demo. At that stage's demo the delegation
-returns to the owner, who says then whether it runs on into the stage after it:
+stage demo review, on 2026-11-27, the owner renewed it (decisions-log item 226 (4)), and it now
+runs on through S4 (the stage that follows S3, named by item 227) to S4's stage demo. Its terms
+change only by a widening the owner approves; the widenings approved so far are the owner's answers
+to points 30 and 33 of item 227: the reviews by risk of AGENTS.md §6, and "What is asked and what
+is told" below. At S4's stage demo the delegation returns to the owner, who says then whether it
+runs on into S5:
 
 - The main assistant session may **merge** any PR while the delegation runs, whatever stage first
   planned its work (stage lanes, carries from earlier stages, docs and harness PRs, Dependabot's),
@@ -85,11 +87,12 @@ returns to the owner, who says then whether it runs on into the stage after it:
   merge the script makes locally without a commit, and undoes), with the merge pinned to that head
   and `main`'s push run watched after it (decisions-log items 116 (2) and 145 (3)). A branch takes
   `main` only by a signed merge and merges by a merge commit, never by a rebase or a force-push
-  (AGENTS.md §6) — and the two adversarial reviews
-  have been applied; the owner reviews the stage demo (AGENTS.md §10 item 8) rather than each PR.
+  (AGENTS.md §6) — and the adversarial reviews AGENTS.md §6 requires (two or one, by risk;
+  decisions-log item 227) have been applied; the owner reviews the stage demo (AGENTS.md §10 item 8)
+  rather than each PR.
   Every merge is still a PR whose body names the contract paths it touches, except Dependabot's,
   which the main session merges the same way (decisions-log item 120): for an action pinned by SHA
-  the two reviews read the release notes and the diff between the two SHAs, and for a Cargo
+  the reviews read the release notes and the diff between the two SHAs, and for a Cargo
   security update the advisory and the crate's diff; a comment names the contract paths and the
   head the reviews read, the merge is pinned to that head, and the main session asks
   `@dependabot rebase` rather than rebasing or merging into the branch itself: Dependabot rebases
@@ -97,14 +100,22 @@ returns to the owner, who says then whether it runs on into the stage after it:
   branches we push, so the request asks for no rebase by us. Sub-agents still open a PR and stop.
 - The owner accepts **bypass-permissions mode** in that same session and in the sub-agents and
   workflow agents it launches, which inherit the mode (decisions-log item 116 (9)). Sub-agents still
-  open a PR and stop; for them the contract-file rule is held by the lane's brief, the two adversarial
-  reviews and the main session's reading of every PR before it merges, rather than by prompts. The
-  ban above stays in force for any session or agent that touches a real seat.
+  open a PR and stop; for them the contract-file rule is held by the lane's brief, the adversarial
+  reviews AGENTS.md §6 requires and the main session's reading of every PR before it merges, rather
+  than by prompts. The ban above stays in force for any session or agent that touches a real seat.
 
-A standing limit on both, which is not a relaxation and does not expire at S3's demo: the main
+A standing limit on both, which is not a relaxation and does not expire at a stage's demo: the main
 session never merges, on its own word, a change to a point the decisions log reserves to the owner
 or to something the owner ruled; it keeps building everything else, holds that piece, and brings
 the questions to the owner as a batch (decisions-log item 168 (12)).
+
+**What is asked and what is told** (decisions-log item 227, the owner's answer to point 33). The
+main session decides these and tells the owner in a short list the owner can veto, rather than
+asking: keeping a tuning value as built; re-dating a marker; spec or AGENTS.md edits that only make
+the text match what was built or what the owner already ruled; and how a test or measurement is
+run. It always asks about anything that changes what the player experiences, scope, lore, a rule of
+the project, risk the owner would carry, and anything the owner ruled before. Item 168 (12)'s
+hold-and-batch, the paragraph above, still governs what is asked.
 
 ## Commands
 
