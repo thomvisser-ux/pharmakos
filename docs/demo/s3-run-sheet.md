@@ -559,7 +559,8 @@ can veto each.**
 ## Owner rulings at the demo
 
 One batch (decisions-log item 168 (12), hold and batch). Each comes with the lane's recommendation and
-its class. None is answered here.
+its class. The owner's answers, given at the review on 2026-11-27, are decisions-log item 226; none
+is answered in this sheet.
 
 1. **The rows `tune3` kept (decision 19's agenda).** Rules revision 8 moved scout vision 24 → 28
    (answer 21) and added `structures.resonance_spire_build_ms` 60000 (answer 19, marked for this

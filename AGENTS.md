@@ -29,7 +29,7 @@ spikes are closed, frozen at the `spike-end` tag and deleted from `main`;
 their measured results and their lessons for the skeleton live under `docs/spikes/`, and reading the
 spike code means `git worktree add ../pharmakos-spikes spike-end`. The walking skeleton is closed
 (decisions-log item 126, 2026-09-29), S1 is closed (decisions-log items 139 and 143, 2026-10-16), S2 is
-closed (decisions-log item 155, 2026-10-28), S3 is under way (decisions-log items 153 and 154 and `docs/design/s3-plan.md`), and every crate in §3 has code; mark any value
+closed (decisions-log item 155, 2026-10-28), S3 is closed (decisions-log item 226, 2026-11-27), the stage that follows S3 is being re-planned (decisions-log item 226), and every crate in §3 has code; mark any value
 you had to guess with a `PLACEHOLDER` comment naming who fixes it and when.
 
 ---
@@ -754,9 +754,9 @@ of that premise.
 - **Never run an agent in bypass-permissions mode against a real seat**, and do not use it in this
   repository. The contract-file rule in §5 depends on approval prompts actually happening. Game
   tools are reached through pre-approved allow rules; bypass mode is not a shortcut, it is the
-  removal of the mechanism. The owner's one exception, for the walking skeleton, S1, S2 and S3 only,
-  is in CLAUDE.md: bypass mode in the owner's own session and the agents it launches, never against
-  a real seat (decisions-log items 86, 116 (9), 126, 141 and 152).
+  removal of the mechanism. The owner's one exception, for the walking skeleton, S1, S2, S3 and the stage
+  that follows S3 only, is in CLAUDE.md: bypass mode in the owner's own session and the agents it
+  launches, never against a real seat (decisions-log items 86, 116 (9), 126, 141, 152 and 226).
 - Rate limits, an audit log and message bounds on the gateway are part of the feature, not a later hardening task.
   A request is within `MAX_MESSAGE_BYTES`, and a message past it closes the connection with close code 1009; its `id` is within `MAX_ID_BYTES`, and one past it is an Invalid Request answered under no id. Neither is `RESPONSE_TOO_LARGE`, which is only for an answer. An answer is within
   `MAX_ANSWER_BYTES` or is the typed refusal `RESPONSE_TOO_LARGE`, sent in its place and never a cut text, with the
