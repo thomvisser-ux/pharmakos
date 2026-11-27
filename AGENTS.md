@@ -867,7 +867,7 @@ merge train's local check.
 > `protoc-gen-prost`) still skips, and lets its step report `ok`, unless
 > `PHARMAKOS_REQUIRE_TOOLS=1` is set, as it is in CI and in the merge train's local check. Item 11's budgets arrive with the gates that
 > set them: S1's P1, S2's G3′-real, and S3's G2 + P3 and P1's end-to-end bar. Each gate is certified
-> only by recorded runs on the owner's machine (S3's were certified on 2026-11-27: decisions-log item 223),
+> only by recorded runs on the owner's machine (S3's timed figures were certified on 2026-11-27: decisions-log item 223),
 > and their CI alarms, `cargo xtask g3-budget`, `cargo xtask
 > p3-budget` and `cargo xtask p1-budget`, sit outside the step table and can go red (item 11);
 > every `perf-alarms` figure is published, never gated. The owner
@@ -983,7 +983,8 @@ merge train's local check.
 11. **Perf budgets** *(added per gate, not in `cargo xtask ci`)* — G3′-real (spec §16's G3′ row:
     a tick p99 of at most 25 ms and a mean of at most 12.5 ms) is certified by recorded runs on the
     owner's machine under Windows and WSL2 Linux, the slower deciding (S2's plan, section 5; `g3r`
-    #147, re-certified on `tune2`'s rules by `demo2`, decisions-log item 151). Its CI alarm is
+    #147, re-certified on `tune2`'s rules by `demo2`, decisions-log item 151, and with raids on
+    `tune3`'s by the certifying runs of decisions-log item 223). Its CI alarm is
     `cargo xtask g3-budget` (`xtask/src/g3.rs`, E18), which is not a step: it plays the segment once
     on a hosted runner and fails only at the gate's numbers doubled (a p99 over 50 ms or a mean over
     25 ms) or on any missing verdict, in the `g3 budget (ubuntu-24.04)` job, which is not required
