@@ -25,7 +25,7 @@ Docs are MIT OR Apache-2.0, like the schemas — the game code is GPL-3.0-or-lat
 
 | File | What it is |
 | --- | --- |
-| `pharmakos-spec-v0.6.html` | **Current.** Draft 6, dated 2026-09-13. Sections 1–19: vision, world, match structure, commander, beacons, mandates, economy, capabilities, maps, playbooks, verifier, Seat Gateway, editor, built-in operator, **§15 architecture**, spikes and gates, the build plan to v0.1 and v1, roadmap, tuning and risks. |
+| `pharmakos-spec-v0.6.html` | **Current.** Draft 6, dated 2026-09-13. Sections 1–19: vision, world, match structure, commander, beacons, mandates, economy, capabilities, maps, playbooks, verifier, Seat Gateway, editor, built-in operator, **§15 architecture**, spikes and gates, the build plan to the public preview and v1, roadmap, tuning and risks. |
 | `airgap-spec-v0.5.html` | Archive. Draft 5, under the AirGap codename. Superseded — kept so decisions that cite it stay readable. |
 
 The sections a coding agent needs most often: **§15** for crate boundaries, determinism,

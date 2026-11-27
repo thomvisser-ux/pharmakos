@@ -257,7 +257,8 @@ Allowed:
   before it is relicensed BY-SA as part of `assets/`.
 - **Music**: two or three tracks from OpenGameArt, ccMixter or Opsound, each
   with an individual per-track licence check recorded in its sidecar file.
-  Shipping v0.1 with no music at all is an acceptable outcome.
+  Shipping the public preview (whichever version passes the fun gate;
+  decisions-log item 228) with no music at all is an acceptable outcome.
 
 **Sonniss GDC bundles are excluded.** They are distributed under a custom
 licence, not a Creative Commons one, and the v2.0 terms additionally forbid use

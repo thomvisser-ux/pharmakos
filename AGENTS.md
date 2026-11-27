@@ -796,10 +796,10 @@ of that premise.
   repository. The contract-file rule in §5 depends on approval prompts actually happening. Game
   tools are reached through pre-approved allow rules; bypass mode is not a shortcut, it is the
   removal of the mechanism. The owner's one exception, for the walking skeleton, S1, S2, S3 and S4
-  only (through S4 to S4's stage demo: the main session's reading of item 226 (4) after the re-cut,
-  **decided; the owner can veto**), is in CLAUDE.md: bypass mode in the owner's own session and the
-  agents it launches, never against a real seat (decisions-log items 86, 116 (9), 126, 141, 152,
-  226 and 227). "A real seat" is not yet defined here; the AI play harness's lane brings the
+  only (through S4 to S4's stage demo, the owner's answer to point 42, "At S4's stage demo
+  (Recommended)"; decisions-log item 228), is in CLAUDE.md: bypass mode in the owner's own session
+  and the agents it launches, never against a real seat (decisions-log items 86, 116 (9), 126, 141,
+  152, 226, 227 and 228). "A real seat" is not yet defined here; the AI play harness's lane brings the
   definition to the owner before it builds (decisions-log item 227).
 - Rate limits, an audit log and message bounds on the gateway are part of the feature, not a later hardening task.
   A request is within `MAX_MESSAGE_BYTES`, and a message past it closes the connection with close code 1009; its `id` is within `MAX_ID_BYTES`, and one past it is an Invalid Request answered under no id. Neither is `RESPONSE_TOO_LARGE`, which is only for an answer. An answer is within
@@ -1096,6 +1096,31 @@ ruled by decisions-log item 128). The command keeps the smoke run's user folders
 `<target>/package/data/` itself, and reads the export templates from Godot's own folder, where they
 must be installed.
 
+**Versions and tags** (decisions-log item 228, the owner's answer to point 41). Versions are
+stage-based before 1.0, the minor number the stage: `v0.N.0` closes stage N (S3's build is
+`v0.3.0`, S4's close `v0.4.0`), `v0.N.P` is a fix to it (`v0.3.1` and on), `v0.N.0-mK` is
+milestone K's build inside stage N (the three towers' build is `v0.4.0-m1`), and `v1.0.0` is v1.
+The skeleton's `v0.1.0-dev.<n>` tags are history. There is no "public v0.1": the public preview
+is whichever version passes the fun gate. `xtask/src/package.rs`'s `VERSION` is the one source of
+the version string (decisions-log item 142): the zips' note, notices and changelog carry it, the
+Windows preset in `godot/export_presets.cfg` repeats it, and `package.rs`'s tests hold the preset
+and `CHANGELOG.md`'s `## <VERSION>` heading to it. `[workspace.package] version` stays `0.0.0`
+(item 117 (2)), so `gamectl --version` prints `0.0.0` and the note's build line names the build.
+**A tag is pushed by the main session, on the owner's ruling, never by a lane**; the tag rulesets
+make a `v*` tag immutable and let only a repository admin create one (decisions-log items 119 (2)
+and 121). On a pushed `v*` tag, `.github/workflows/release.yml` checks the tag's shape
+(`v<major>.<minor>.<patch>[-<suffix>]`), that its commit is on `main`, and that `ci.yml`'s push
+run for that exact commit succeeded; takes that run's two zips, with no rebuild; takes the notes
+from `CHANGELOG.md`'s section headed with `VERSION` at that commit; for a tag with no `-` suffix
+requires `VERSION` to be the tag's own version; and creates a draft release, a prerelease when
+the tag has a suffix, which the owner publishes. So the commit a tag goes on is one whose
+`VERSION` is the tag's version. **The test tiers by tag kind**, as the owner ruled them (points 29
+and 41; decisions-log items 227 and 228), are the rule the merge queue's pull request will
+implement: a stage close (`v0.N.0`) or a public release is "major" and gets the timed certifying
+runs, the fuzz and the adversarial arms; a milestone or patch tag gets the merge queue's full
+matrix only. **CI is not changed by this rule yet**: until that pull request, the suite, the
+nightly and the certifying runs stand as this section describes them.
+
 **The PLACEHOLDER register.** `cargo xtask placeholders` collects every
 `PLACEHOLDER` marker in the tracked tree, parses each against the one-line grammar
 `<what> — <who>, <when>`, prints the register grouped by when and by who, and with `--check` fails
@@ -1141,9 +1166,10 @@ stages keep their slots (point 37) and the previous ladder is not thrown away (p
 stage's earlier contents, such as S4's symmetric three-way generator, the award fund and P7, S5's
 P2 and Normal and Hard, S6's full editor and S7's scrub and casual mode, are **carried inputs,
 re-placed when that stage is detailed**. **The fun gate** moves to after the first new-core
-milestone (decisions-log items 226 (5) and 227). **The public v0.1**'s build and its place are
-held with the versioning scheme, the owner's to rule: point 31 holds the rc until that scheme
-names the build, and item 154 (3) ties v0.1.0 to the rc's commit. Only the week numbers after S3
+milestone (decisions-log items 226 (5) and 227). *Decided* (decisions-log item 228, the owner's
+answer to point 41): **the public v0.1 is retired**, and the public preview is whichever version
+passes the fun gate; S3's build is `v0.3.0` in place of item 154 (3)'s private `v0.1.0-rc.1`,
+which is retired with it; versions follow §9's "Versions and tags". Only the week numbers after S3
 are history: they are dropped, and dates are re-estimated per stage; the week numbers up to S3
 stand as the record.
 
