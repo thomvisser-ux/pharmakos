@@ -485,8 +485,8 @@ its room stated in the source and a typed refusal past it: the Defend protect li
 `seat_avoid_room_of` (the seat's beacon rows times `TARGETS_PER_BEACON` and `AVOID_AREAS_PER_BEACON`),
 so one seat's lists never fill another's, a commit past its own seat's room writing nothing and
 failing `targets_unwritten`, and `crates/sim/tests/list_rooms.rs` holding each room, and the
-interpreter's `MAX_ROUTE_STEPS`, to at least the committed size budget, and `MAX_HANDLERS` to the
-working handlers a budget can hold (half of it); and planted
+interpreter's `MAX_ROUTE_STEPS`, to at least the committed size budget, and `MAX_HANDLERS` to at
+least half the budget (the working handlers a budget can hold); and planted
 charges, one a beacon row (`PlantRefused::Full`, the carrier keeping its charge). The sighting table's
 room is every asset the world's tables can hold alive at once (`sighting_room_of`): a seat forgets
 its stalest sighting for room, by age alone, and the world counts what each seat forgets, a count
@@ -867,7 +867,8 @@ merge train's local check.
 > `protoc-gen-prost`) still skips, and lets its step report `ok`, unless
 > `PHARMAKOS_REQUIRE_TOOLS=1` is set, as it is in CI and in the merge train's local check. Item 11's budgets arrive with the gates that
 > set them: S1's P1, S2's G3′-real, and S3's G2 + P3 and P1's end-to-end bar. Each gate is certified
-> by recorded runs on the owner's machine, and their CI alarms, `cargo xtask g3-budget`, `cargo xtask
+> only by recorded runs on the owner's machine (S3's are not yet certified: decisions-log item 220),
+> and their CI alarms, `cargo xtask g3-budget`, `cargo xtask
 > p3-budget` and `cargo xtask p1-budget`, sit outside the step table and can go red (item 11);
 > every `perf-alarms` figure is published, never gated. The owner
 > signs off the final step list, and the numeric budgets are Tuning values that the gates in spec
@@ -989,8 +990,8 @@ merge train's local check.
     but **can go red**, and `scripts/merge-train.sh` stops on it. G2 + P3 (a repath p99 of at most
     5 ms and a one-leg estimate p99 of at most 1 ms) and P1 (QUICK at most 5 ms and FULL at most
     50 ms p99 at the playbook size budget, and the editor's end-to-end wait at most 50 ms p99,
-    decisions-log item 162 (1)) have the same certification, recorded runs on the owner's machine under
-    both systems, and their CI alarms are `cargo xtask
+    decisions-log item 162 (1)) are certified only the same way, by recorded runs on the owner's machine
+    under both systems (not yet: decisions-log item 220), and their CI alarms are `cargo xtask
     p3-budget` and `cargo xtask p1-budget` (`xtask/src/budget.rs`, E12), not steps either, in the
     `authoring budgets (ubuntu-24.04)` job, which fails only at those numbers doubled or on any
     missing verdict (a bar or a plan that is not xtask's own is one), is not required, **can go

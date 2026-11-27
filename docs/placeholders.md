@@ -347,8 +347,8 @@ golden). `demo2` is a docs pull request, so it moves no marker, and the command 
 - `rules/README.md`'s Settled? table, the rows it marks S3 and S3's exit: 5 rows (7 `rules.proto`
   fields: `match.decision_tick_ms`, `structures.resonance_spire`, `verifier.handler_cooldown_min_ms`,
   `max_fires_max`, `notebook_max_chars`, `reach_memory_ms` at S3 and `size_budget_units` at S3's
-  exit), plus `locomotion.climb_surcharge`, whose README row says "owner, S3" without the marker (re-worded
-  "owner, at S3's demo" by `close3`, decisions-log item 220 (6)) and
+  exit), plus `locomotion.climb_surcharge`, whose README row says "owner, S3" without the marker (`close3` re-words
+  it "owner, at S3's demo", decisions-log item 220 (6)) and
   whose `rules.proto` field carries none; `crates/sim/src/rules.rs` marks it. `crates/verifier/src/
   limits.rs` restates `reach_memory_ms` as "S2/S3".
 - **Re-dated by `tune3` #250 (rules revision 8; item 219 (12)).** The seven fields are kept at their
@@ -360,8 +360,8 @@ golden). `demo2` is a docs pull request, so it moves no marker, and the command 
   two restatements read "the reach window's tuning, kept at its value by `tune3` (revision 8) — owner,
   at S3's demo (item 90)" and "the size budget's tuning, 128 by E24's mechanics and decision 9 —
   owner, at S3's demo, with `cert3`'s P1 curve"; `crates/sim/src/rules.rs`' `climb_surcharge` marker
-  reads "kept at its value by `tune3` (revision 8) — owner, at S3's demo", while its README row said
-  "owner, S3" until `close3` re-worded it the same way (items 219 (13) and 220 (6)). One row is new: `structures.resonance_spire_build_ms` 60000
+  reads "kept at its value by `tune3` (revision 8) — owner, at S3's demo", while its README row says
+  "owner, S3" until `close3` re-words it the same way (items 219 (13) and 220 (6)). One row is new: `structures.resonance_spire_build_ms` 60000
   (S3-31), "owner, at S3's demo, with `tune3`'s report".
 - **The rows of every other stage that named "`tune3`'s balance re-run"** (the S2 rows moved to S3
   at S2's close, and the economy, power and map rows): 135 marker lines (90 in `rules.proto`, 38 in
