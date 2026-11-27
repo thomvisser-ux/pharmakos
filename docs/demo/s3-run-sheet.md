@@ -25,8 +25,8 @@ catalogue, the lobby's and the editor's from `godot/scripts/strings.gd`. A numbe
 such as `<N>`, is one the match decides and this sheet cannot know. Row IDs such as S3-33 are rows of
 the PLACEHOLDER register, `docs/placeholders.md`.
 
-**The P6 gate, in one line:** `<filled by the main session from docs/demo/p6c-record.md: template
-<t> s, scratch <s> s, typing clause <met or missed>>`, AI-driven by the main session, **not a person's
+**The P6 gate, in one line:** template 85.0 s of 120, scratch 96.15 s of 300, typing clause met (three
+of three chips), no miss (`docs/demo/p6c-record.md`), AI-driven by the main session, **not a person's
 time**; the owner rules at this review whether S3 closes on it (section 5.3's closing rule).
 
 **How the steps were checked.** The main session cannot watch the vista, so every match step below
@@ -517,6 +517,16 @@ the owner can veto, unless it quotes the owner.
     tests with and an attacker breaks in with; its latest generation is Cairn, an open-source engine
     that coordinates AI agents toward a goal and is used for autonomous penetration testing by both."
     The owner can veto the wording.
+12. **Where P6 was read, and the lost clicks** (`docs/demo/p6c-record.md`). The template timing was read
+    on the primary monitor, under the driving application's own always-on-top window, which lay over
+    the game's right panel and which the driver's screenshots do not show: three clicks on "Submit"
+    never reached the game (the game's `--log-input` has no line for them, and `WindowFromPoint` at the
+    button named that window). The scratch timing and the typing clause were read with the game's
+    window moved to the second monitor, and every click registered first time. Decided: the template
+    timing stands as read, 85.0 s, the lost clicks included (about 45 s of it); it was not re-run for
+    a better number, because the rule reads the gate once; the owner can veto. The P6 practice notes'
+    "a click was swallowed" lines have the same cause. The lesson for the next hand read: move the
+    game away from the driving application's window first.
 
 ## Owner rulings at the demo
 
@@ -610,7 +620,7 @@ reading and the lone carrier (items 217 (6) and 219 (10)); the lane limit's word
 | 2. A first-timer can file a playbook | the guided pick (step 2); Ready with nothing sealed files the safe playbook and says so (`the_filing_line_says_what_ended_the_lull`, run, "ok"); every refusal a sentence (the verifier's catalogue and the gateway's string table) | met |
 | 3. The four metrics recorded and exported, nothing else, no network | `playtest_bundle.rs` (22 tests) and `no_network.rs` (9 tests), run, "ok"; `crates/gamectl/tests/confinement.rs` in CI | met |
 | 4. The zip opens on a clean machine | `clean launch (windows-latest)` and `clean launch (ubuntu-24.04)` green in run 46036162824 on `a8aa864a` (and in 46033625376 on `5e62ba7`); the unsigned note is `README.txt`'s first lines | met |
-| 5. No numeric threshold written anywhere | no threshold in `playtest.gd`, `playtest.rs`, the playtest strings, this sheet or the tester's sheet | **SPEC3-PENDING.** **Not met in the spec at `a8aa864a`**: spec section 16's gate row still reads "Go if a majority answer yes and Push attention is a stated majority of the segment"; section 4.4's amendment ("the owner's judgement, on the playtest bundle's four metrics") has not landed there. It is being landed by `spec3`'s pull request (`docs/s3-spec`, number to follow), which merges before this one |
+| 5. No numeric threshold written anywhere | no threshold in `playtest.gd`, `playtest.rs`, the playtest strings, this sheet or the tester's sheet | **Not met in the spec at `a8aa864a`**: spec section 16's gate row still reads "Go if a majority answer yes and Push attention is a stated majority of the segment"; section 4.4's amendment ("the owner's judgement, on the playtest bundle's four metrics") has not landed there. It is being landed by `spec3`'s pull request, #258 (`docs/s3-spec`; merged as `SPEC3-PENDING`), which merges before this one |
 | 6. The tester's sheet exists | `docs/demo/fun-gate-sheet.md`: how to start the zip, turn on Playtest mode, and send the bundle by hand; no tester's name or address, and no channel | met |
 
 ## AGENTS.md section 10, item by item
@@ -623,7 +633,7 @@ reading and the lone carrier (items 217 (6) and 219 (10)); the lane limit's word
 | 4. Headless scenarios assert events and hashes | 24 committed scenarios (all but the three nightly arms) replayed by the packaged `gamectl` against their golden chains, all "ok", the seven under `scenarios/s3/` included, on `5e62ba7`'s zip and again on `a8aa864a`'s | this sheet's packages |
 | 5. The nightly adversarial scenarios | run 45997206064: the Rusher 16 of 20 (open, acknowledged), the Hunter 9, the Turtle 0 | the nightly |
 | 6. The depth task and gate | G2 + P3 and P1 certified on `a8aa864a`, the zip's commit, by item 225 (item 223 the morning's record at `7a604e22`); P6 by the closing rule, AI-driven, on the owner's ruling (`docs/demo/p6c-record.md`) | items 223 and 225; the record |
-| 7. Docs in the same PR | **SPEC3-PENDING.** **Not all landed at `a8aa864a`**: none of section 4.4's spec amendments (the spec is unchanged there since 2026-10-09), which `spec3`'s pull request (`docs/s3-spec`, number to follow) is landing before this one merges: section 3's Probation paragraph, section 8's licence, section 13's chips, vocabulary and meter, section 14's Survey post, section 16's fun-gate row, sections 3, 16 and 17's v0.1 and the S3 and S4 rows, section 19's memo copy. AGENTS.md section 3 rule 4's S3 client pieces and section 9 item 11's authoring alarm have landed | the spec; AGENTS.md |
+| 7. Docs in the same PR | **Not all landed at `a8aa864a`**: none of section 4.4's spec amendments (the spec is unchanged there since 2026-10-09), which `spec3`'s pull request, #258 (`docs/s3-spec`; merged as `SPEC3-PENDING`), is landing before this one merges: section 3's Probation paragraph, section 8's licence, section 13's chips, vocabulary and meter, section 14's Survey post, section 16's fun-gate row, sections 3, 16 and 17's v0.1 and the S3 and S4 rows, section 19's memo copy. AGENTS.md section 3 rule 4's S3 client pieces and section 9 item 11's authoring alarm have landed | the spec; AGENTS.md |
 | 8. The owner reviews the demo | this review | the owner |
 
 ## Found while writing this sheet
@@ -637,6 +647,15 @@ reading and the lone carrier (items 217 (6) and 219 (10)); the lane limit's word
   diagnostics log"; the bundle holds `manifest.json`, `survey.json`, `metrics.json` and
   `diagnostics.log`, and no recording (`the_bundle_holds_exactly_its_four_entries`). AGENTS.md is a
   contract file, so this lane does not edit it.
+- **"0.001 to - s" in the hold step's number popup** (found at the P6 read; for the first client lane
+  after S3, changed nothing now). The popup reads "The gateway's range here: 0.001 to - s." where the
+  range has no top. The words are the client's: `godot/scripts/strings.gd` line 163,
+  `"rule_number_bounds": "The gateway's range here: {min} to {max}{unit}."`, filled by
+  `godot/scripts/editor.gd` line 1792, which writes `"-"` for `max` when the chip carries no
+  `has_max` (the comment above it, line 1791: "`-` where it set none"). Proposal: an unbounded range
+  says so in words (a string-table row such as "at least {min}{unit}", chosen by the client from the
+  gateway's `has_min` and `has_max` as sent). It is recorded, not fixed: a change to the client now
+  would mean a new zip after the read.
 - **The register's prose on the repair threshold of 50** names three JSONC files; the marker stands on
   13 lines in 12 files (`library/hold_and_build.jsonc`, `scenarios/skeleton/against-easy.playbook.jsonc`,
   `godot/fixtures/instantiate_suggested.json`, the gateway's `instantiate_suggested` golden, the

@@ -18,8 +18,9 @@ to the empty playbook that "New" put on screen.
 5. Walk to your core.
 6. Place a beacon on another spot of ground inside your sphere.
 7. Walk to another spot of ground near your core.
-8. Click a heat vent. The menu offers two rows: take "Place beacon covering the nearest vent you can
-   cover". If you take "Place beacon covering this vent" instead, say so. If the menu says "Go here"
+8. Click a heat vent. The menu offers two rows, "Place beacon covering this vent" and then "Place
+   beacon covering the nearest vent you can cover": take the second. If you take the first instead,
+   say so. If the menu says "Go here"
    and "Place beacon", you missed the vent, so press Escape and click closer to its middle.
 9. Walk to your core.
 10. Visit your core and set its priority **normal**.
