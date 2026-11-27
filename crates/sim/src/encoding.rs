@@ -29,7 +29,8 @@
 //! length to 300, across xxh3's block boundaries and under every chunking it
 //! tries). The streaming shape exists for the plan fingerprint (S3's
 //! `fpstream`), whose canonical text is hashed as it is written and never
-//! held whole.
+//! held whole, and for the verifier's report hash (S3's `p1m`), whose
+//! playbook and snapshot are hashed where they stand and never copied.
 
 use xxhash_rust::xxh3::{Xxh3, xxh3_64_with_seed};
 
@@ -150,6 +151,23 @@ impl Enc {
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.buf
+    }
+
+    /// The canonical bytes built so far **without** the version byte: what a
+    /// caller hands to a [`StreamingDigest`] that already holds an encoding's
+    /// beginning, so a long encoding can be written part by part, the parts
+    /// between its large byte strings by this one encoder and the strings
+    /// themselves handed over as they stand. [`Enc::as_bytes`] of the first
+    /// part and `body` of every later one, joined with the strings between
+    /// them, are the bytes one encoder would have built whole.
+    #[must_use]
+    pub fn body(&self) -> &[u8] {
+        // Every constructor and `clear` push the version byte, and nothing
+        // removes one, so there is always a first byte to leave out.
+        match self.buf.split_first() {
+            Some((_version, body)) => body,
+            None => &self.buf,
+        }
     }
 
     /// How many bytes the encoding currently occupies, version byte included.

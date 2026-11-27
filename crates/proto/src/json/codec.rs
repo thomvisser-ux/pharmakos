@@ -246,9 +246,12 @@ where
 /// streaming state means fewer calls per byte (each call pays a fixed cost
 /// before it reaches the block loop); what it costs is one buffer of this
 /// size per text. Any size writes the same pieces joined, so it is a cost
-/// and never a different text. Untimed: this machine was not idle when the
-/// size was chosen, so it is the order of a first-level data cache, well past
-/// xxh3's 1 KiB block, rather than a measured optimum.
+/// and never a different text. Timed on 2026-11-26 through the plan
+/// fingerprint of the worst P1 shape at the size budget (855 637 canonical
+/// bytes, 300 calls a size, the owner's machine under load): 1 KiB, 8 KiB and
+/// 64 KiB read 1.21 to 1.23 ms, 1.17 to 1.19 ms and 1.18 ms at the median, so
+/// the size is not where the fingerprint's time goes and it stays the order
+/// of a first-level data cache, well past xxh3's 1 KiB block.
 const CHUNK: Limit = match Limit::new(8 << 10) {
     Some(limit) => limit,
     None => panic!("the chunk is too small to hold one escaped character"),
