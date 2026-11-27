@@ -386,13 +386,30 @@ structure table, and `crates/sim/tests/spire.rs`
 
 ### The certification on the final rules
 
-**ITEM-225-PENDING.** The certifying runs on the demo's tree, `a8aa864a`, were retaken by the main
-session after #255 (the three message strings above), and their record is decisions-log item 225; its
-figures replace the table below when the main session sends them, and none is written here before
-then. Until then the table is item 223's, the runs of 2026-11-27 on `main` at `7a604e22` (#253's
-merge), on the owner's i7-9800X under Windows and WSL2 Linux, three repetitions a system, the median of
-the three p99s, the slower system deciding, copied as item 223 states it. **It is not the record of
-runs on `a8aa864a`.**
+**The certification at the zip's commit** is the runs the main session retook on `a8aa864a` on
+2026-11-27 in the afternoon, after #255 (the three message strings above), on the owner's i7-9800X
+under Windows and WSL2 Linux, three repetitions a system, the median of the three p99s, the slower
+system deciding: decisions-log item 225, whose table is copied here as it states it. All 42 runs read
+idle before and after; on Windows the during-run poll marked the runs' own processes in 16 runs, and
+those runs stand ("Told to the owner, not asked", and item 225 (4)). The three G3′ chains' digests are
+identical on both systems and to the morning's.
+
+| Gate | Bar | Windows | WSL2 | Deciding |
+| --- | --- | --- | --- | --- |
+| G2's repath p99 | ≤ 5 ms | 0.937 / 0.898 / 0.885 ms | 0.916 / 0.910 / 0.900 ms | **0.910 ms**, WSL2 |
+| P3's one-leg estimate p99 | ≤ 1 ms | 0.492 / 0.493 / 0.485 ms | 0.485 / 0.485 / 0.488 ms | **0.492 ms**, Windows |
+| P3's accuracy (real commanders, three seeds) | p90 ≤ 15 %, never optimistic | from the serve min 0, p90 0, max 0 per mille; from the send min −48, p50 −2 per mille (the notices are the morning's, line for line) | identical | **0 per mille from the serve, never optimistic** |
+| P1 QUICK p99 at 128, worst shape (`route_guards_24_node`), canonical bytes | ≤ 5 ms | 3.341 / 3.339 / 3.319 ms | 3.132 / 3.214 / 3.113 ms | **3.339 ms**, Windows (33 % under) |
+| P1 FULL p99 at 128, worst shape (`handlers_24_node`) | ≤ 50 ms | 7.607 / 7.769 / 7.651 ms | 7.340 / 7.335 / 7.553 ms | **7.651 ms**, Windows |
+| The editor's end-to-end wait (`verify_plan`, the worse of QUICK and FULL, worst shape `handlers_24_node`; item 162 (1)) | ≤ 50 ms | 8.492 / 8.509 / 8.439 ms | 8.140 / 8.121 / 8.068 ms | **8.492 ms**, Windows |
+| P1 QUICK, the 129 committed cases pooled | ≤ 5 ms | 0.335 / 0.324 / 0.325 ms | 0.270 / 0.265 / 0.270 ms | 0.325 ms, Windows |
+| G3′-real at S2's load, tick p99 / mean (published, unstamped; certifies nothing) | 25 / 12.5 ms | 13.021 / 14.358 / 14.293 ms; mean 4.800 / 5.022 / 5.016 ms | 13.344 / 13.339 / 13.505 ms; mean 4.964 / 4.951 / 5.008 ms | 14.293 / 5.016 ms, Windows (published) |
+| G3′ with raids, `budget_128` | 25 / 12.5 ms | 12.143 / 11.789 / 11.817 ms; mean 4.775 / 4.691 / 4.697 ms | 12.176 / 12.084 / 12.044 ms; mean 4.829 / 4.814 / 4.815 ms | **12.084 / 4.815 ms**, WSL2 |
+| G3′ with raids, `full_eval` at 128 | 25 / 12.5 ms | 12.255 / 11.960 / 11.850 ms; mean 4.793 / 4.725 / 4.720 ms | 12.071 / 12.125 / 12.048 ms; mean 4.837 / 4.834 / 4.835 ms | **12.071 / 4.835 ms**, WSL2 |
+
+**The morning's record**, item 223, the runs of 2026-11-27 on `main` at `7a604e22` (#253's merge), copied
+as item 223 states it. Item 225 supersedes it as the certification of the demo's tree; every certified
+figure of the afternoon is within 5 % of the morning's.
 
 | Gate | Bar | Windows | WSL2 | Deciding |
 | --- | --- | --- | --- | --- |
@@ -407,13 +424,13 @@ runs on `a8aa864a`.**
 | G3′ with raids, `budget_128` | 25 / 12.5 ms | 11.742 / 11.778 / 11.792 ms; mean 4.675 / 4.674 / 4.680 ms | 12.109 / 12.050 / 12.123 ms; mean 4.820 / 4.816 / 4.817 ms | **12.109 / 4.817 ms**, WSL2 |
 | G3′ with raids, `full_eval` at 128 | 25 / 12.5 ms | 11.902 / 11.908 / 11.921 ms; mean 4.718 / 4.705 / 4.710 ms | 12.092 / 12.161 / 12.110 ms; mean 4.839 / 4.834 / 4.840 ms | **12.110 / 4.839 ms**, WSL2 |
 
-The rules hashes as printed: the committed table `641055eb0d38815a`, the G3′ bench table
-`b947507e651166ba`, the layout `46c4018ed990aa15`, the seed `0x00000000ca5caded` (item 223 (2)). The
-size budget stayed at 128 through `tune3`. **ITEM-225-PENDING:** the re-run on the final rules that
-the plan gave this lane (sections 5.1 item 5 and 5.2 item 6, item 162 (5)) is item 225's, on
-`a8aa864a`; this lane took no timed run. **P1 QUICK's margin** on item 223's runs: 3.349 ms, 33 % under
-its 5 ms bar, the closest any gate came (item 223 (3)); item 225's figure replaces it. Not certified by
-these runs: P6 (section 5.3, the record above), and P1's byte identity and fuzz run, below.
+The rules hashes as printed, the same on both: the committed table `641055eb0d38815a`, the G3′ bench
+table `b947507e651166ba`, the layout `46c4018ed990aa15`, the seed `0x00000000ca5caded`. The size budget
+stayed at 128 through `tune3`, so item 225's runs are also the re-run on the final rules that the plan
+gave this lane (sections 5.1 item 5 and 5.2 item 6, item 162 (5)); this lane took no timed run. **P1
+QUICK's margin:** 3.339 ms, 33 % under its 5 ms bar, the closest any gate came (item 225 (3)). Neither
+fallback was taken (decision 18 has nothing to rule). Not certified by these runs: P6 (section 5.3, the
+record above), and P1's byte identity and fuzz run, below.
 
 ### Section 5.2's items 2 and 3, on the final tree
 
@@ -486,6 +503,20 @@ the owner can veto, unless it quotes the owner.
 9. **Items 166 (1) to (6)** (the repair at the end of the Voxels phase, one door for every snapshot,
    the breach search on the walkers' moves, `charge_lost`): none changes what this demo shows, since
    no breach and no charge happens in it.
+10. **The certifying poll's 16 false marks** (item 225 (4)). On Windows the during-run poll marked the
+    runs' own processes FOREIGN in 16 runs, exactly those whose command starts with `env
+    PHARMAKOS_BENCH_CERTIFY=1 cargo ...` (under MSYS that chain leaves cargo's parent process id
+    pointing at an exited process, so the tree walk could not tie it to the wrapper). Checked
+    mechanically: every sample in those 16 lists exactly one `cargo.exe` and the record's own test
+    binary, with the same process ids through the run, and nothing else. The wrapper is fixed and a
+    rehearsal reads "no foreign build process seen". Decided: the 16 runs stand and are not retaken;
+    the owner can veto.
+11. **The theme sentence** (item 224 (13)). On the owner's request of 2026-11-27 ("in addition to
+    referencing metasploit as inspiration, include 'cairn' as the latest generation of pharmakos"),
+    the spec gains, in `spec3`'s pull request: "The inspiration is Metasploit, the framework a defender
+    tests with and an attacker breaks in with; its latest generation is Cairn, an open-source engine
+    that coordinates AI agents toward a goal and is used for autonomous penetration testing by both."
+    The owner can veto the wording.
 
 ## Owner rulings at the demo
 
@@ -530,9 +561,10 @@ its class. None is answered here.
    breach probe's searches spent the bound (16,385 states) in minutes 1 and 2, the slowest 9.807 ms,
    and G3′ with raids certified at 12.109 ms. *Recommendation:* keep `BENCH_SEED` and keep 16,384.
    *Class:* operator: intent.
-10. **R13, the systems' gap**, open for the owner (item 223 (3), (6)): every gap under the 10 to 20 %
-    R13 names, the largest P1 QUICK's 8 %, the 2026-11-26 tail a diagnosis and not a proof; the
-    lesson, "restart Windows first". *Recommendation:* keep R13 open until a later certifying night
+10. **R13, the systems' gap**, open for the owner (items 223 (3), (6) and 225 (6)): on both records the
+    gap is small and of mixed sign, every figure set by the slower system (the morning's largest P1
+    QUICK's 8 %; the afternoon's QUICK 3.339 ms Windows against 3.132 ms WSL2), the 2026-11-26 tail a
+    diagnosis and not a proof; the lesson, "restart Windows first". *Recommendation:* keep R13 open until a later certifying night
     reads clean after a restart, and fix the during-run poll first (item 223 (4)). *Class:* operator:
     risk.
 11. **P6** (the line at the top). *Recommendation:* if the record shows no miss, close S3 on it,
@@ -551,13 +583,24 @@ its class. None is answered here.
 16. **Item 162 (8)'s parked items** (the radar lab, macOS in previews, whether the owner's global
     release rules apply here, where the briefs folder is backed up, whether item 42's registrations
     were made). *Recommendation:* take them at the re-strategy interview. *Class:* operator: priority.
+17. **Spec section 14's Easy's Survey post against the build.** Two readings. The spec's sentence, as
+    item 154 (2) quoted it when the owner ruled "Yes, Easy raids": Easy places a Survey post "when the
+    enemy sightings it needs are stale or missing", and its scouts refresh those sightings before the
+    next Lull, so its raid can come by round 2 or 3 (item 154 (2)'s recorded downside). The build, as
+    the owner ruled on 2026-11-22 ("Refresh only (Recommended)", item 173 (1)): the sentence binds the
+    refresh of sightings already held, a first discovery may take longer, and the scout count stays 2
+    until S5; `opr3` (#205, item 180) built the post, and on seed 20 Easy first sights the owner's
+    beacons in round 5. *Recommendation:* amend spec section 14 to the build as ruled on 2026-11-22.
+    *Class:* operator: intent.
 
 **Held for the re-strategy interview, not in this batch:** the order of `deps3` and the scouts'
 routing after S3 (answers 24 and 30, items 217 (3) and 220 (5)); the decision tick's kinds'
 disagreement (items 217 (6) and 223 (7)); the veto list of item 217 (6) (the sighting table's room,
 each seat's list and avoid-area rooms and the interpreter's two ceilings, item 219 (1) and (5), and the
 reading of answer 20); the balance re-read of every S2, economy, power and map row, the duel report's
-reading and the lone carrier (items 217 (6) and 219 (10)); and the re-strategy itself (item 173 (7)).
+reading and the lone carrier (items 217 (6) and 219 (10)); the lane limit's wording (AGENTS.md section
+6 and spec section 15 say 2 to 3 agents; the owner's latest word is four); and the re-strategy itself
+(item 173 (7)).
 
 ## The fun gate's readiness (section 1.4), checked
 
@@ -579,7 +622,7 @@ reading and the lone carrier (items 217 (6) and 219 (10)); and the re-strategy i
 | 3. Golden playbooks round-trip, verify and render identically | `tests/golden/plan-core/` and `tests/golden/verifier/`, green on the matrix and compared across systems | run 46036162824 |
 | 4. Headless scenarios assert events and hashes | 24 committed scenarios (all but the three nightly arms) replayed by the packaged `gamectl` against their golden chains, all "ok", the seven under `scenarios/s3/` included, on `5e62ba7`'s zip and again on `a8aa864a`'s | this sheet's packages |
 | 5. The nightly adversarial scenarios | run 45997206064: the Rusher 16 of 20 (open, acknowledged), the Hunter 9, the Turtle 0 | the nightly |
-| 6. The depth task and gate | **ITEM-225-PENDING.** G2 + P3 and P1 certified by item 223 on `7a604e22`, and retaken on `a8aa864a` by the main session, recorded in item 225; P6 by the closing rule, AI-driven, on the owner's ruling (`docs/demo/p6c-record.md`) | items 223 and 225; the record |
+| 6. The depth task and gate | G2 + P3 and P1 certified on `a8aa864a`, the zip's commit, by item 225 (item 223 the morning's record at `7a604e22`); P6 by the closing rule, AI-driven, on the owner's ruling (`docs/demo/p6c-record.md`) | items 223 and 225; the record |
 | 7. Docs in the same PR | **SPEC3-PENDING.** **Not all landed at `a8aa864a`**: none of section 4.4's spec amendments (the spec is unchanged there since 2026-10-09), which `spec3`'s pull request (`docs/s3-spec`, number to follow) is landing before this one merges: section 3's Probation paragraph, section 8's licence, section 13's chips, vocabulary and meter, section 14's Survey post, section 16's fun-gate row, sections 3, 16 and 17's v0.1 and the S3 and S4 rows, section 19's memo copy. AGENTS.md section 3 rule 4's S3 client pieces and section 9 item 11's authoring alarm have landed | the spec; AGENTS.md |
 | 8. The owner reviews the demo | this review | the owner |
 
