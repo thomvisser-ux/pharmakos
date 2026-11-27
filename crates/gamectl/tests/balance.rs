@@ -2690,7 +2690,8 @@ fn the_expand_east_column_asks_each_seats_estimate_route() {
     for (seat, estimate_ms) in estimates {
         assert!(
             estimate_ms.is_some_and(|ms| ms > 0),
-            "seat {seat}: the site is reachable from the core on this map, at a positive time;              got {estimate_ms:?}"
+            "seat {seat}: the site is reachable from the core on this map, at a positive time; \
+             got {estimate_ms:?}"
         );
     }
 }

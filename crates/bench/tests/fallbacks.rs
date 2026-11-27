@@ -44,7 +44,8 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     (
         "src/g3/variant.rs",
         "let raise = draw.saturating_sub(power.core_surplus_kw);",
-        "the raise is how far the gate's draw passes the shipped surplus, and zero when the \n         surplus already covers it: the floor is the rule",
+        "the raise is how far the gate's draw passes the shipped surplus, and zero when the \
+         surplus already covers it: the floor is the rule",
     ),
     (
         "src/g3/watch.rs",

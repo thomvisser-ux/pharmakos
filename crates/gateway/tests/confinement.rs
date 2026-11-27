@@ -2115,10 +2115,10 @@ fn no_allow_defeats_a_determinism_lint() {
     }
     assert!(
         findings.is_empty(),
-        "an #[allow] this crate has not accounted for. If it is a determinism lint the answer          is not an allow (AGENTS.md section 5); if it is not, add it to PERMITTED_ALLOWS with          the reason:
-{}",
-        findings.join("
-")
+        "an #[allow] this crate has not accounted for. If it is a determinism lint the answer \
+         is not an allow (AGENTS.md section 5); if it is not, add it to PERMITTED_ALLOWS with \
+         the reason:\n{}",
+        findings.join("\n")
     );
     // And the scan can see one: the permitted allow is in the source right now.
     let surface = std::fs::read_to_string(
@@ -2832,14 +2832,7 @@ fn the_fallback_scan_finds_what_it_looks_for() {
 #[test]
 fn no_shipped_code_calls_a_sim_fixture() {
     let findings = scan(SIM_FIXTURES);
-    assert!(
-        findings.is_empty(),
-        "{}",
-        findings.join(
-            "
-"
-        )
-    );
+    assert!(findings.is_empty(), "{}", findings.join("\n"));
 }
 
 // ---------------------------------------------------------------------------
