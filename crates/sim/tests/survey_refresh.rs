@@ -675,10 +675,7 @@ fn a_held_enemy_beacon_sighting_is_fresh_at_every_later_lull() {
             }
         }
     }
-    eprintln!(
-        "fresh: {fresh:#?}
-stale: {stale:#?}"
-    );
+    eprintln!("fresh: {fresh:#?}\nstale: {stale:#?}");
     assert!(stale.is_empty(), "a held sighting went stale: {stale:#?}");
     assert!(
         fresh.len() >= 5,

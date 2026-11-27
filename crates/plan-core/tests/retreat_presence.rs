@@ -145,8 +145,7 @@ fn render_plan_says_a_written_zero_as_retreat_off_with_its_chip() {
     let off = rendered(&playbook(r#""retreat_hp_pct": 0"#));
     assert!(
         off.prose.contains("retreat off (0%)"),
-        "a written 0 is said as retreat off:
-{}",
+        "a written 0 is said as retreat off:\n{}",
         off.prose
     );
     let chip = off
