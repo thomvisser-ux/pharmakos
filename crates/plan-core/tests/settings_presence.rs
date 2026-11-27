@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Decisions-log item 184 (10): `scout_count`, `dig_max_depth` and
+//! Decisions-log item 184 (3): `scout_count`, `dig_max_depth` and
 //! `pillar_spacing` carry presence, and four lists have a `clear_*` flag.
 //!
 //! A written 0 and a set clear survive the canonical form and the JSONC round
@@ -538,7 +538,7 @@ type Said = (String, Vec<&'static str>, Vec<(&'static str, &'static str)>);
 /// Every field a Build, Survey or Mine arm writes is said, each value with a
 /// chip holding it, and a field the row leaves out is not said and has no
 /// chip, as the Defend and Attack arms say only what they write
-/// (decisions-log item 184 (10), fix pass 1).
+/// (decisions-log item 184 (3), fix pass 1).
 #[test]
 fn render_plan_says_every_written_setting_of_the_build_survey_and_mine_arms() {
     let area = r#"{"min":{"x":1,"y":1,"z":1},"max":{"x":2,"y":2,"z":2}}"#;

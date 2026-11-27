@@ -533,7 +533,7 @@ impl Visit for Semantics<'_> {
             self.out.emit(Diag::new("E0502", at));
         }
         // An omitted count has nothing to check; a written 0 fields no scout
-        // (decisions-log item 184 (10)).
+        // (decisions-log item 184 (3)).
         if let Some(mandate_settings::Mandate::Survey(survey)) = settings.mandate.as_ref()
             && let Some(scouts) = survey.scout_count
         {

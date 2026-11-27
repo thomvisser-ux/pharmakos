@@ -694,6 +694,32 @@ fn the_watch_segment_polls_counts_and_probes() {
         "{:?}",
         report.breach
     );
+    // The expansions are the sim's own count: a search that spent its bound
+    // reads one past it, and no search reads further.
+    let bound = pharmakos_sim::attack::BREACH_EXPANSIONS;
+    let past_bound = bound
+        .checked_add(1)
+        .expect("the bound is far below u32::MAX");
+    for probe in &report.breach {
+        assert!(probe.most_expansions <= past_bound, "{probe:?}");
+        assert!(
+            probe.total_expansions >= u64::from(probe.most_expansions),
+            "{probe:?}"
+        );
+        assert_eq!(
+            probe.exhausted > 0,
+            probe.most_expansions > bound,
+            "a search is exhausted exactly when it read past its bound: {probe:?}"
+        );
+        let searched = [probe.found, probe.exhausted, probe.no_way]
+            .iter()
+            .try_fold(0_u64, |sum, count| sum.checked_add(*count))
+            .expect("the outcomes of a minute's searches fit a u64");
+        assert_eq!(
+            searched, probe.sealed,
+            "every sealed way is searched: {probe:?}"
+        );
+    }
     let line = watch::view_notice(&report, "linux");
     assert!(
         line.starts_with("::notice title=G3' view feed bytes::on linux, "),

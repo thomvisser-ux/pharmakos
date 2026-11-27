@@ -232,7 +232,7 @@ impl Shape {
 
     /// A Survey arm's `scout_count`: a count up to a beacon's byte column
     /// (`E0508`) whose 0 fields no scout (the sim's Survey mandate asks the
-    /// fabricator for none under a count of 0; decisions-log item 184 (10)
+    /// fabricator for none under a count of 0; decisions-log item 184 (3)
     /// gave the field presence, so a written 0 is held).
     #[must_use]
     pub const fn scout_count() -> Shape {
@@ -246,7 +246,7 @@ impl Shape {
 
     /// A Mine arm's `dig_max_depth`: voxels below the seam's original top,
     /// whose 0 digs the exposed rim only (the sim's miner takes no voxel
-    /// deeper than the depth; item 184 (10)).
+    /// deeper than the depth; item 184 (3)).
     #[must_use]
     pub const fn dig_max_depth() -> Shape {
         Shape::Integer {

@@ -12,9 +12,10 @@
 # client's on the mark.
 #
 # Without `--shot=` it is a check: every template has its button, exactly one is marked, and
-# the sentence under it is the gateway's. NOT YET COMPARED: `cargo xtask screenshot` renders
-# only the shots `xtask`'s SHOTS lists, and its row is an `xtask` change this lane does not own
-# (S3's `cert3` adds it); until then it is run by hand (godot/README.md):
+# the sentence under it is the gateway's.
+# COMPARED: `cargo xtask screenshot` renders it and compares it with
+# `tests/golden/vista/expected.templates.png` (`xtask`'s SHOTS, from S3's `cert3`). It can also
+# be run by hand (godot/README.md):
 #
 #     godot --path godot --resolution 1280x720 -- --scene=res://scenes/templates_shot.tscn --shot=<png>
 #

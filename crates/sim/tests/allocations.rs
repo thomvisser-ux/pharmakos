@@ -2104,6 +2104,11 @@ mod tick {
             Err(BreachRefused::Exhausted)
         );
         assert_eq!(
+            scratch.expansions(),
+            pharmakos_sim::attack::BREACH_EXPANSIONS + 1,
+            "a search that spends its bound reads one past it"
+        );
+        assert_eq!(
             searching, 0,
             "the search at its most work allocated {searching} times"
         );

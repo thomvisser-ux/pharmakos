@@ -210,7 +210,7 @@ pub struct RulesTable {
     /// The commander's walking speed in cost units per second. `10` (item 90).
     /// From `commander.cost_per_second`.
     ///
-    /// PLACEHOLDER: the commander's speed — owner, at S3's demo (item 152 (1) 2), with `tune3`'s report of the spawn travel distance (item 90; the skeleton's demo kept it, and ruling 6 of S1's stage demo, decisions-log item 139 (1), kept it for S1).
+    /// PLACEHOLDER: the commander's speed — owner, at S3's demo (item 152 (1) 2), kept by `tune3` with no balance re-run under item 213's answer 22; `tune3` made no report of the spawn travel distance (item 90; the skeleton's demo kept it, and ruling 6 of S1's stage demo, decisions-log item 139 (1), kept it for S1).
     commander_cost_per_second: i32,
     /// The HPA\* cluster edge in voxels. `32` — one chunk footprint, a single
     /// abstract level (item 58). From `locomotion.hpa_cluster_voxels`.

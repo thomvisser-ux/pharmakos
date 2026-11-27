@@ -11,9 +11,10 @@
 #   * fixtures/recap_probation_round.json - tests/golden/gateway/recap_probation_round/
 #
 # Without `--shot=` it is a check: the memo row is the Ledger's, the recap carries the memo and
-# the prose whole, and the scene quits 0. NOT YET COMPARED: `cargo xtask screenshot` renders only
-# the shots `xtask`'s SHOTS lists, and its row is an `xtask` change this lane does not own (S3's
-# `cert3` adds it); until then it is run by hand (godot/README.md):
+# the prose whole, and the scene quits 0.
+# COMPARED: `cargo xtask screenshot` renders it and compares it with
+# `tests/golden/vista/expected.lobby.png` (`xtask`'s SHOTS, from S3's `cert3`). It can also
+# be run by hand (godot/README.md):
 #
 #     godot --path godot --resolution 1280x720 -- --scene=res://scenes/lobby_shot.tscn --shot=<png>
 #
