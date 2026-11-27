@@ -1052,7 +1052,8 @@ impl AttackRows {
             out_of_range(
                 "combat.charge_damage_hp",
                 format!(
-                    "{}; a charge's blast takes at least one hit point, at most a signed \n                     32-bit count",
+                    "{}; a charge's blast takes at least one hit point, at most a signed \
+                     32-bit count",
                     combat.charge_damage_hp
                 ),
             )

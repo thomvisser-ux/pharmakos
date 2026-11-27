@@ -354,8 +354,7 @@ fn the_verifier_never_ranks() {
             // the pathfinder in without naming it.
             if line.contains("pharmakos_sim::") && line.contains('*') {
                 findings.push(format!(
-                    "{}:{number}: a glob import of the sim can reach the pathfinder unnamed
-    {}",
+                    "{}:{number}: a glob import of the sim can reach the pathfinder unnamed\n    {}",
                     path.display(),
                     line.trim()
                 ));

@@ -26,7 +26,9 @@
 
 #![allow(
     clippy::expect_used,
-    reason = "clippy.toml sets allow-expect-in-tests, but that configuration only recognises               #[test] functions and #[cfg(test)] modules, not an integration test's helper               functions. A panic is this file's failure report."
+    reason = "clippy.toml sets allow-expect-in-tests, but that configuration only recognises \
+              #[test] functions and #[cfg(test)] modules, not an integration test's helper \
+              functions. A panic is this file's failure report."
 )]
 
 use pharmakos_proto::fingerprint::{PLAN_FINGERPRINT_DOMAIN, canonical_input};

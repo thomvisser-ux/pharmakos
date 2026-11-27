@@ -312,7 +312,8 @@ fn a_target_one_column_outside_a_protected_box_is_built() {
             (column(south), 0),
             (column(north), 0),
         ],
-        "every target outside the box is built, in its order, and the one          inside it is not: {queued:?}"
+        "every target outside the box is built, in its order, and the one \
+         inside it is not: {queued:?}"
     );
 }
 
@@ -467,7 +468,8 @@ fn unaffordable_targets_wait_for_the_highest_order_affordable_one() {
     let (mut runner, queued, failed) = play(fixture, &visit_writing(&build), 400);
     assert!(
         treasury(runner.world()).raw() < cost.raw(),
-        "the starting drone's ore has not covered a Generator yet, so the test          still reads an unaffordable target"
+        "the starting drone's ore has not covered a Generator yet, so the test \
+         still reads an unaffordable target"
     );
     assert!(!failed, "an order the treasury cannot cover fails nothing");
     assert!(queued.is_empty(), "nothing is paid for: {queued:?}");

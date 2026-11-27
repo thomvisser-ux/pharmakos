@@ -226,10 +226,7 @@ fn declared_pointers(template: &str) -> Vec<String> {
         .lines()
         .filter(|line| !line.trim_start().starts_with("//"))
         .collect::<Vec<_>>()
-        .join(
-            "
-",
-        );
+        .join("\n");
     let json = pharmakos_proto::json::read(&body).expect("the template reads");
     let Some(Json::Array(parameters)) = json.get("meta").and_then(|meta| meta.get("parameters"))
     else {

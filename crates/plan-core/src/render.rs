@@ -3375,11 +3375,7 @@ mod tests {
             s::WALL_BOX_TO,
             s::PLACE_VOXEL
         );
-        assert!(
-            text.contains(&phrase),
-            "`{phrase}` is not in
-{text}"
-        );
+        assert!(text.contains(&phrase), "`{phrase}` is not in\n{text}");
 
         // A box missing a corner says so rather than inventing one.
         let area = pharmakos_proto::gp::v1::Area {

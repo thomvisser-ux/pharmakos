@@ -1086,12 +1086,12 @@ fn watch_the_control_pipe<C: Read + Send + 'static>(
             let job = match read {
                 Ok(Ok(_)) => Job::Stop,
                 Ok(Err(error)) => Job::PipeFailed(Error::internal(said!(
-                    "the control pipe failed ({}): the parent can no longer put the match 
+                    "the control pipe failed ({}): the parent can no longer put the match \
                      down, so this host did, as at end of file",
                     crate::error::engine(&error)
                 ))),
                 Err(_) => Job::PipeFailed(Error::internal(
-                    "the control pipe's reader panicked: the parent can no longer put the 
+                    "the control pipe's reader panicked: the parent can no longer put the \
                      match down, so this host did, as at end of file",
                 )),
             };

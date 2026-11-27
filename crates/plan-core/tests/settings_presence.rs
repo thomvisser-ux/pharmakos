@@ -148,8 +148,7 @@ fn a_clear_written_false_is_the_playbook_that_leaves_it_out() {
         // The JSONC the player keeps drops it too, and the plan is the same.
         assert!(
             !written.text.contains(member),
-            "{member}: the canonical JSONC kept a false:
-{}",
+            "{member}: the canonical JSONC kept a false:\n{}",
             written.text
         );
         assert_eq!(

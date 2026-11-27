@@ -446,7 +446,8 @@ fn the_rank_follows_the_audits_tie_break_term_by_term() {
     assert_eq!(
         ranks(vec![line(0, 200, 50, 3), line(1, 200, 10, 0)]),
         vec![Some(2), Some(1)],
-        "on a tied score, more held ranks ahead (decision 7: the builder beats the raider),          whatever was lost"
+        "on a tied score, more held ranks ahead (decision 7: the builder beats the raider), \
+         whatever was lost"
     );
     assert_eq!(
         ranks(vec![line(0, 200, 10, 2), line(1, 200, 10, 1)]),

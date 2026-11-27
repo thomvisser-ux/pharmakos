@@ -16,7 +16,8 @@
 
 #![allow(
     clippy::expect_used,
-    reason = "clippy.toml's allow-expect-in-tests only recognises #[test] functions, not an               integration test's helpers. A panic is this file's failure report."
+    reason = "clippy.toml's allow-expect-in-tests only recognises #[test] functions, not an \
+              integration test's helpers. A panic is this file's failure report."
 )]
 
 use pharmakos_plan_core::error::Bound;
@@ -133,7 +134,8 @@ fn pointers(value: &pharmakos_proto::json::Json, at: &str, out: &mut Vec<String>
 
 #[allow(
     clippy::disallowed_methods,
-    reason = "clippy.toml's own reason string sanctions read_dir when the listing is collected               and sorted before use, which is what happens below"
+    reason = "clippy.toml's own reason string sanctions read_dir when the listing is collected \
+              and sorted before use, which is what happens below"
 )]
 fn playbooks() -> Vec<String> {
     let root: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
