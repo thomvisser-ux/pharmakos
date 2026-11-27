@@ -21,8 +21,8 @@ a statement about the platform or the caller (`screenshot` off Linux, `stage-cli
 `PHARMAKOS_REQUIRE_TOOLS=1`, which CI and the merge train's local check set (decisions-log item
 116 (6)(g)); the `--require-tools` flag alone covers the steps' own tools, not a test's. The three-OS matrix runs on every pull request, and the `cross-OS determinism guard`
 job byte-compares every leg's determinism chain, scenario chains, path hashes, mesher, mapgen
-and vista geometry digests and verifier reports (the at-budget `budget_128` report required on all
-three; decisions-log item 218), so §10's "all three operating systems agree on the hash chains" is
+and vista geometry digests and verifier reports (every report required on all three, the at-budget
+`budget_128` report by name; decisions-log item 218), so §10's "all three operating systems agree on the hash chains" is
 checked on every pull request that changes more than prose and on `main`'s push (item
 116 (6)(n); a prose-only pull request takes the fast path of §9, item 115 (4)). The four stack
 spikes are closed, frozen at the `spike-end` tag and deleted from `main`;
@@ -86,7 +86,7 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
 | `crates/gamectl` — `pharmakos-gamectl` (bin `gamectl`) | CLI: `verify`, `schema`, `docs`, `scenario run`, `seat doctor`, `host`, every command run on one thread of the stated player-text stack. No `connect` in v1. `scenario run` hosts a headless match and `host` serves one to the Godot client over its own stdio pipe (the config line in on stdin, the announce line with the port and the tokens out on stdout, exit when stdin ends), which is why the gateway is on the list. From T18, `host` links the built-in operator and adapts its client to the gateway's in-process seats (decisions-log item 111); from T18b, `scenario run` seats a `builtin` seat with Easy through `serve::InProcessSeats` (decisions-log item 113). | `pharmakos-proto`, `pharmakos-plan-core`, `pharmakos-verifier`, `pharmakos-gateway`, `pharmakos-operator`, and `pharmakos-sim` *only* as `default-features = false`, because the gateway's API is written in the sim's types. `gamectl` drives a match only through the gateway's `Host` and `Surface`, never through the sim's `Runner` (decisions-log item 109) |
 | `crates/mesher` — `pharmakos-mesher` | The **walled** greedy mesher: integer chunk data and `.vox` models in, vertex and index buffers out, under the per-frame upload budget the client applies. Links without gdext, so the headless CPU proxy and the CI geometry check reuse it. | `dot_vox` later; nothing from the sim. Never depended on by `sim`, `plan-core`, `verifier`, `operator`, `gateway` or `gamectl` — `cargo xtask wall-guard` fails the build over it (`WALL_GUARDED_PACKAGES`, §4.9) |
 | `crates/client-gdext` — `pharmakos-client-gdext` | **Thin** gdext bridge (`cdylib` + `rlib`): marshals gateway calls and mesh buffers between Godot 4.7 and Rust. It marshals; it does not decide, and rule 4 names the pieces that schedule or draw without deciding. | `godot` (gdext), `pharmakos-proto`, `pharmakos-mesher` |
-| `crates/bench` — `pharmakos-bench` | The **walled** timing harness for P1 (decisions-log item 131): QUICK's p50 and p99 over the committed verifier cases and `budget_128`, and the wall-clock cost of a decision tick per size unit from a hosted match whose playbooks sit at the size budget; and, from S2's `g3h` and `g3r` (decisions-log items 149 and 151), G3′-real's 8-minute segment at the gate's load with its phase, repath, drift, combat, footing and support-search figures, and the power sweep run by hand with the certifying runs; and, from S3's `cert3` (decisions-log item 218), the commands S3's gates are certified on, each naming its commit and stamping every line with what it sampled: P1's certifying run (`p1_certify`, with the editor's end-to-end wait and E12's seed rule), the decision tick's cost per counted unit by kind (the covering kinds, near and far, among them), and G3′-real's watch (the view feed's bytes, each seat's peak sightings and the breach search at the gate's load). Published by `cargo xtask perf-alarms`, and the segment's tick read by `cargo xtask g3-budget`. Never shipped. It restates the verifier goldens' fixture, and `tests/harness.rs` holds the restatement to the committed reports. | `pharmakos-proto`, `pharmakos-verifier`, `pharmakos-gateway`, and `pharmakos-sim` *only* as `default-features = false`. It takes no `CLIENT_WALL` line, because it exists to drive the sim from outside; no deterministic crate may depend on it (`WALL_GUARDED_PACKAGES`, §4.9) |
+| `crates/bench` — `pharmakos-bench` | The **walled** timing harness for P1 (decisions-log item 131): QUICK's p50 and p99 over the committed verifier cases and `budget_128`, and the wall-clock cost of a decision tick per size unit from a hosted match whose playbooks sit at the size budget; and, from S2's `g3h` and `g3r` (decisions-log items 149 and 151), G3′-real's 8-minute segment at the gate's load with its phase, repath, drift, combat, footing and support-search figures, and the power sweep run by hand with the certifying runs; and, from S3's `cert3` (decisions-log item 218), the commands S3's gates are certified on, each naming its commit and stamping every line with what it sampled: P1's certifying run (`p1_certify`, with the editor's end-to-end wait and E12's seed rule), the decision tick's cost per counted unit by kind (the covering kinds, near and far, among them), and G3′-real's watch (the view feed's bytes, each seat's peak sightings and the breach search at the gate's load). Published by `cargo xtask perf-alarms`, and the segment's tick read by `cargo xtask g3-budget`, and P1's and P3's report lines by `cargo xtask p1-budget` and `cargo xtask p3-budget`. Never shipped. It restates the verifier goldens' fixture, and `tests/harness.rs` holds the restatement to the committed reports. | `pharmakos-proto`, `pharmakos-verifier`, `pharmakos-gateway`, and `pharmakos-sim` *only* as `default-features = false`. It takes no `CLIENT_WALL` line, because it exists to drive the sim from outside; no deterministic crate may depend on it (`WALL_GUARDED_PACKAGES`, §4.9) |
 | `xtask` | `cargo xtask ci` and friends. Dev-only, never shipped, std-only, no dependencies. | nothing |
 
 > **Internal boundaries — decided (decisions-log items 56 and 70).** There is **no `math` crate**:
@@ -485,7 +485,8 @@ its room stated in the source and a typed refusal past it: the Defend protect li
 `seat_avoid_room_of` (the seat's beacon rows times `TARGETS_PER_BEACON` and `AVOID_AREAS_PER_BEACON`),
 so one seat's lists never fill another's, a commit past its own seat's room writing nothing and
 failing `targets_unwritten`, and `crates/sim/tests/list_rooms.rs` holding each room, and the
-interpreter's `MAX_ROUTE_STEPS` and `MAX_HANDLERS`, to at least the committed size budget; and planted
+interpreter's `MAX_ROUTE_STEPS`, to at least the committed size budget, and `MAX_HANDLERS` to the
+working handlers a budget can hold (half of it); and planted
 charges, one a beacon row (`PlantRefused::Full`, the carrier keeping its charge). The sighting table's
 room is every asset the world's tables can hold alive at once (`sighting_room_of`): a seat forgets
 its stalest sighting for room, by age alone, and the world counts what each seat forgets, a count
@@ -865,9 +866,10 @@ merge train's local check.
 > 116 (6)(g)). A test that needs a tool (`crates/proto/tests/generated.rs` needs buf and
 > `protoc-gen-prost`) still skips, and lets its step report `ok`, unless
 > `PHARMAKOS_REQUIRE_TOOLS=1` is set, as it is in CI and in the merge train's local check. Item 11's budgets arrive with the gates that
-> set them, S1's P1 and S2's G3′-real. G3′-real's gate is certified by recorded runs on the
-> owner's machine, and its CI alarm, `cargo xtask g3-budget`, sits outside the step table (item 11);
-> every other figure is published, never gated. The owner
+> set them: S1's P1, S2's G3′-real, and S3's G2 + P3 and P1's end-to-end bar. Each gate is certified
+> by recorded runs on the owner's machine, and their CI alarms, `cargo xtask g3-budget`, `cargo xtask
+> p3-budget` and `cargo xtask p1-budget`, sit outside the step table and can go red (item 11);
+> every `perf-alarms` figure is published, never gated. The owner
 > signs off the final step list, and the numeric budgets are Tuning values that the gates in spec
 > section 16 set.
 
@@ -987,7 +989,8 @@ merge train's local check.
     but **can go red**, and `scripts/merge-train.sh` stops on it. G2 + P3 (a repath p99 of at most
     5 ms and a one-leg estimate p99 of at most 1 ms) and P1 (QUICK at most 5 ms and FULL at most
     50 ms p99 at the playbook size budget, and the editor's end-to-end wait at most 50 ms p99,
-    decisions-log item 162 (1)) are certified the same way, and their CI alarms are `cargo xtask
+    decisions-log item 162 (1)) have the same certification, recorded runs on the owner's machine under
+    both systems, and their CI alarms are `cargo xtask
     p3-budget` and `cargo xtask p1-budget` (`xtask/src/budget.rs`, E12), not steps either, in the
     `authoring budgets (ubuntu-24.04)` job, which fails only at those numbers doubled or on any
     missing verdict (a bar or a plan that is not xtask's own is one), is not required, **can go

@@ -138,9 +138,10 @@ p1-budget` and `cargo xtask package` sit outside the step table;
 measurement (an unknown alarm name is a usage error), `g3-budget` (G3′-real's CI alarm, in the
 `g3 budget (ubuntu-24.04)` job, not required) and `p3-budget` and `p1-budget` (the authoring alarms,
 in the `authoring budgets (ubuntu-24.04)` job, not required) **can** fail, each at its gates'
-numbers doubled or on a missing verdict, and `scripts/merge-train.sh` stops on them; every
-certifying run sets `PHARMAKOS_BENCH_CERTIFY=1`, or each line it prints carries the "NOT A
-CERTIFYING FIGURE" banner (decisions-log item 218); and `package` runs alone (AGENTS.md §9). `cargo xtask placeholders` lists the register and never
+numbers doubled or on a missing verdict, and `scripts/merge-train.sh` stops on them; a
+certifying run sets `PHARMAKOS_BENCH_CERTIFY=1`: without it, or when `PHARMAKOS_BENCH_CERT_CALLS`
+cuts a count, each line a run prints carries the "NOT A CERTIFYING FIGURE" banner (decisions-log
+item 218); and `package` runs alone (AGENTS.md §9). `cargo xtask placeholders` lists the register and never
 fails; its `--check` is one of the sixteen steps, `placeholders`, run after `reuse`, and fails on any
 marker off the register's grammar (decisions-log item 137).
 
