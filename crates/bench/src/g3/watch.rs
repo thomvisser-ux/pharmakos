@@ -1062,6 +1062,7 @@ mod tests {
             (9, Err(BreachRefused::NoWay), 70),
             (2, Err(BreachRefused::Exhausted), past_bound),
             (3, Ok(()), 10),
+            (4, Err(BreachRefused::NoWay), 5),
         ] {
             probe
                 .book(&TimedSearch {
@@ -1071,10 +1072,10 @@ mod tests {
                 })
                 .expect("a search whose count is its answer's");
         }
-        assert_eq!((probe.found, probe.no_way, probe.exhausted), (2, 1, 1));
-        assert_eq!((probe.slowest_ns, probe.total_ns), (9, 19));
+        assert_eq!((probe.found, probe.no_way, probe.exhausted), (2, 2, 1));
+        assert_eq!((probe.slowest_ns, probe.total_ns), (9, 23));
         assert_eq!(probe.most_expansions, past_bound);
-        assert_eq!(probe.total_expansions, u64::from(past_bound) + 110);
+        assert_eq!(probe.total_expansions, u64::from(past_bound) + 115);
     }
 
     /// A count that is not its answer's is refused, not booked: exhausted
