@@ -48,7 +48,9 @@ Open a PR and stop — do not merge, do not work around it — when a task takes
   definition of `ci` and of `package`, licence files, or these harness docs (AGENTS.md §5);
 - adding a dependency that is not on the approved list (AGENTS.md §3);
 - anything on the "what not to build in v1" list (AGENTS.md §11) — script runtimes, MCP, an SDK, a
-  published API, AI seats, manual control, playbook flags/branch/repeat;
+  published API, an AI inside the game or a socket attach (the experimental external seat of
+  AGENTS.md §2 is the one door for a program outside), manual control, playbook
+  flags/branch/repeat;
 - a `#[allow]` that would defeat a determinism lint.
 
 Never disable a determinism lint to make a build pass, never regenerate golden hashes to make a red
@@ -59,7 +61,9 @@ function or a shadow copy of a `.proto`.
 
 Do not use bypass-permissions mode in this repository, and never against a real seat. The
 contract-file rule depends on approval prompts actually happening; bypass mode removes the
-mechanism rather than speeding it up.
+mechanism rather than speeding it up. The owner's definition (AGENTS.md §7; decisions-log item
+229, point 47): "A real seat is a seat in a match that another person plays in or relies on, or
+that reads text from outside this repository. Test matches on this machine are not real seats."
 
 **Owner's delegation for the walking skeleton, S1, S2, S3 and S4 (decisions-log
 §2.7 items 85, 86, 116 (2) and (9), and 120, from 2026-09-14; renewed for S1 by item 126 (2) (g),
