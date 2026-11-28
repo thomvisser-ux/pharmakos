@@ -1063,7 +1063,8 @@ merge train's local check.
     (§4.5).
 
 **The docs-only fast path.** A pull request whose merge commit changes only `docs/**`, `AGENTS.md`,
-`CLAUDE.md`, `.claude/**` and top-level `*.md` runs the DCO walk and the `reuse` step in place of the
+`CLAUDE.md`, `.claude/**` and top-level `*.md` other than `CHANGELOG.md` (which ships in the zip and
+which the version test reads; decisions-log item 228) runs the DCO walk and the `reuse` step in place of the
 suite; either can still fail it. Every other required job skips its remaining steps and reports
 success; each job that builds, and the cross-OS guard, says so in a `::notice::`. Each building
 job's scope step decides (each shard, not the leg's `cargo xtask ci (<os>)` job, which takes prose
@@ -1119,13 +1120,18 @@ version. It is the merge commit of a pull request that does nothing but set the 
 `VERSION` and the preset, and renames `CHANGELOG.md`'s `-dev` section to the tag's version (or
 adds the section) and makes it stand on its own. That pull request touches `xtask/**`, so it gets
 two reviews (§6). Between tags, `main`'s `VERSION` names the stage being built, with `-dev`
-(`0.4.0-dev` throughout S4), over a `## 0.4.0-dev` section that collects what has landed. The
-first pull request of new work after a tag sets it, and until it merges nothing but fixes merges,
-so a build of new work never claims a released version. **A tag is pushed by the main session, never by a
+(`0.4.0-dev` throughout S4), over a `## 0.4.0-dev` section that collects what has landed. A
+pull request that does nothing but set it merges after the tag and before any new work, so a
+build of new work never claims a released version. **A tag is pushed by the main session, never by a
 lane, and each tag needs the owner's word** (the owner approved `v0.3.0` in point 41; that every
 later tag is asked for is the main session's reading, which the owner can veto); the tag rulesets
 make a `v*` tag immutable and let only a repository admin create one (decisions-log items 119 (2)
-and 121). On a pushed `v*` tag, `.github/workflows/release.yml` checks the tag's shape
+and 121). **A pushed tag cannot be moved or deleted, so a wrong one spends its version number for
+good:** before pushing a tag, the main session runs the workflow's dry run (`workflow_dispatch`
+with the tag and the commit's `sha`) and pushes only after it passes; if a tag is pushed before
+its commit's push run is green, the remedy is to re-run the release run, never to tag again. A
+tag is pushed from a checkout whose HEAD is the tagged commit, because the pre-push hook checks
+HEAD's tree. On a pushed `v*` tag, `.github/workflows/release.yml` checks the tag's shape
 (`v<major>.<minor>.<patch>`, or the same with `-m<K>`, and no other suffix, so a `-dev` version
 can never be tagged), that its commit is on `main`, and that `ci.yml`'s push run for that exact
 commit succeeded; takes that run's two zips, with no rebuild; requires `VERSION` at that commit to
@@ -1133,10 +1139,10 @@ be the tag's own version, for every tag; takes the notes from `CHANGELOG.md`'s s
 it; and creates a draft release, a prerelease when the tag is a milestone's. The workflow publishes nothing: a draft stays unpublished
 until the owner publishes it or says otherwise, and the main session asks when it pushes the tag
 (`v0.3.0`'s draft included: the public preview is whichever version passes the fun gate). **A fix
-tag (`v0.N.P`)** is possible only while `main` holds nothing but fixes since `v0.N.0`, that is,
-until the `-dev` pull request merges, because the workflow accepts only a commit on `main`: the
-fix's own pull request sets `VERSION` to `0.N.P` and is tagged on its merge commit. Once new work
-has merged, a fix ships in the next milestone build. A release branch would change `release.yml` and is the owner's to rule
+tag (`v0.N.P`)** is possible only while `main` holds nothing but fixes and the `-dev` version
+change since `v0.N.0`, because the workflow accepts only a commit on `main`: the fix's own pull
+request sets `VERSION` to `0.N.P` (moving the `-dev` section's heading back with it) and is
+tagged on its merge commit. Once new work has merged, a fix ships in the next milestone build. A release branch would change `release.yml` and is the owner's to rule
 (held). **The test tiers by tag kind**, as the owner ruled them (points 29 and 41; decisions-log
 items 227 and 228), are the rule the merge queue's pull request will implement: a stage close
 (`v0.N.0`) or a public release is "major" and gets the timed certifying runs, the fuzz and the

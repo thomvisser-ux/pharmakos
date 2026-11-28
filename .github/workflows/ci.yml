@@ -49,7 +49,8 @@
 # `cargo xtask ci-scope` right after its checkout and toolchain steps, in a step with
 # `id: scope`. It answers
 # `prose_only=true` only for a `pull_request` whose merge commit changes nothing but
-# `docs/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**` and top-level `*.md`, and false on every
+# `docs/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**` and top-level `*.md` other than
+# `CHANGELOG.md` (the zip ships it and the version test reads it), and false on every
 # other event and on any error (the rules and their tests are in xtask/src/scope.rs).
 #
 # The rules for editing this file around it:

@@ -88,7 +88,7 @@ jobs:
           # The scheme's two forms (item 228): a release, or a milestone build `-m<K>`. No
           # other suffix: a `-dev` tag on main's head would cut a release of a dev build.
           if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-m[0-9]+)?$ ]]; then
-            echo "::error::the tag is not v<major>.<minor>.<patch> or v<major>.<minor>.<patch>-m<K>"
+            echo "::error::the tag is not v<major>.<minor>.<patch> or v<major>.<minor>.<patch>-m<K>. If it was pushed, the tag rulesets keep it: a v* tag cannot be moved or deleted, and this one will never cut a release"
             exit 1
           fi
           if [ "$EVENT" = "push" ]; then
@@ -130,16 +130,16 @@ jobs:
           run=$(gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&per_page=1" \
             --jq '.workflow_runs[0] // empty | [.id, .status, (.conclusion // "none")] | @tsv')
           if [ -z "$run" ]; then
-            echo "::error::ci.yml has no push run for $SHA; tag main's head once its run is green"
+            echo "::error::ci.yml has no push run for $SHA. A pushed tag cannot be moved: once ci.yml's push run for this commit exists and is green, re-run this run (\`gh run rerun $GITHUB_RUN_ID\`)"
             exit 1
           fi
           IFS=$'\t' read -r id status conclusion <<< "$run"
           if [ "$status" != "completed" ]; then
-            echo "::error::the push run for $SHA is still running; tag again once it is green (run $id)"
+            echo "::error::the push run for $SHA is still running (run $id). A pushed tag cannot be moved: once that run is green, re-run this run (\`gh run rerun $GITHUB_RUN_ID\`)"
             exit 1
           fi
           if [ "$conclusion" != "success" ]; then
-            echo "::error::the push run for $SHA concluded $conclusion (run $id); re-run it with \`gh run rerun $id\`, or tag main's head once its run is green"
+            echo "::error::the push run for $SHA concluded $conclusion (run $id). A pushed tag cannot be moved: re-run that run with \`gh run rerun $id\`, and once it is green re-run this one (\`gh run rerun $GITHUB_RUN_ID\`)"
             exit 1
           fi
           echo "RUN_ID=$id" >> "$GITHUB_ENV"
@@ -179,7 +179,11 @@ jobs:
           # Every tag, with a suffix or without: the commit's version is the tag's (item 228).
           # $heading passed the version-shape check above, so printing it raw is safe.
           if [ "$heading" != "${TAG#v}" ]; then
-            echo "::error::tag $TAG needs the package version ${TAG#v} at $SHA; it is $heading. Tag the commit that sets VERSION to ${TAG#v}"
+            if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+              echo "::error::tag $TAG is on $SHA, whose package version is $heading, not ${TAG#v}. A pushed tag cannot be moved or deleted, so this tag can never cut a release: the version number is spent, and the next one needs the owner's word. Dry-run a tag (workflow_dispatch, with the commit's sha) before pushing it"
+            else
+              echo "::error::tag $TAG needs the package version ${TAG#v}; at $SHA it is $heading. Give this dry run the \`sha\` of the commit that sets VERSION to ${TAG#v}"
+            fi
             exit 1
           fi
           gh api "repos/$GH_REPO/contents/CHANGELOG.md?ref=$SHA" --jq .content | base64 -d > changelog.md

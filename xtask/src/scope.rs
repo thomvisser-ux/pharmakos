@@ -23,7 +23,7 @@
 //! * `git diff --no-renames --no-relative --ignore-submodules=none --name-only
 //!   -z HEAD^1 HEAD` names at least one path, and every path it names is on the
 //!   allow-list: `docs/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**` and a
-//!   top-level `*.md`.
+//!   top-level `*.md` other than `CHANGELOG.md`.
 //!
 //! Why that diff and no other. `HEAD^1..HEAD` is exactly what the pull request
 //! changes against the base branch as it is now: `HEAD^2..HEAD` would be the
@@ -68,8 +68,15 @@ const PULL_REQUEST: &str = "pull_request";
 const PROSE_DIRECTORIES: &[&str] = &["docs/", ".claude/"];
 
 /// Top-level files that are prose by name. Every other top-level `*.md` is prose
-/// too (see [`is_prose`]); these two are named because item 115 (4) names them.
+/// too (see [`is_prose`]), [`READ_BY_THE_SUITE`] apart; these two are named
+/// because item 115 (4) names them.
 const PROSE_FILES: &[&str] = &["AGENTS.md", "CLAUDE.md"];
+
+/// Top-level `*.md` files that are not prose, because the suite reads them.
+/// `CHANGELOG.md` ships in the zip, and from item 228 `package.rs`'s version
+/// test reads its first section: a pull request that edits it alone could
+/// otherwise merge on the DCO walk and `reuse` and turn `main`'s push run red.
+const READ_BY_THE_SUITE: &[&str] = &["CHANGELOG.md"];
 
 /// Environment variables that would point a git command at another repository
 /// or index than the directory it runs in. Removed from every git command here,
@@ -123,6 +130,9 @@ pub(crate) fn is_prose(path: &str) -> bool {
     if PROSE_FILES.contains(&path) {
         return true;
     }
+    if READ_BY_THE_SUITE.contains(&path) {
+        return false;
+    }
     // A top-level `*.md` with a non-empty stem.
     !path.contains('/')
         && path
@@ -143,7 +153,7 @@ pub(crate) fn classify(paths: &[String]) -> Scope {
     let noun = if count == 1 { "path" } else { "paths" };
     Scope::Prose(format!(
         "{count} {noun} changed, all on the prose allow-list \
-         (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md)"
+         (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md but CHANGELOG.md)"
     ))
 }
 
@@ -347,6 +357,19 @@ mod tests {
     #[test]
     fn a_top_level_readme_alone_is_prose() {
         assert!(classify(&paths(&["README.md"])).prose_only());
+    }
+
+    /// The changelog is a top-level `*.md` and still not prose: it ships in the
+    /// zip, and the version test reads it (item 228). Alone or beside prose, it
+    /// runs everything.
+    #[test]
+    fn the_changelog_is_not_prose() {
+        assert!(!is_prose("CHANGELOG.md"));
+        assert_eq!(
+            classify(&paths(&["CHANGELOG.md"])),
+            Scope::Full("`CHANGELOG.md` is not on the prose allow-list".to_owned())
+        );
+        assert!(!classify(&paths(&["docs/README.md", "CHANGELOG.md"])).prose_only());
     }
 
     #[test]
@@ -604,7 +627,7 @@ mod tests {
             scope,
             Scope::Prose(
                 "5 paths changed, all on the prose allow-list \
-                 (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md)"
+                 (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md but CHANGELOG.md)"
                     .to_owned()
             )
         );
