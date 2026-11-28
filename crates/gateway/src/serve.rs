@@ -152,7 +152,9 @@
 //!   accessor, so the binary that drives it (`gamectl match`) holds none and
 //!   can print none. There is no admin token: the match moves by
 //!   [`External::advance`], a host-side call no method reaches, and only once
-//!   the outside seat has said it is ready.
+//!   the outside seat has said it is ready. The three boundaries it crosses
+//!   are the `headless` module's, the one place beside the admin handlers
+//!   that may name a driving method; this file names none.
 //! * **The seat's rate is its own**, [`crate::limit::EXTERNAL_LIMITS`], for
 //!   the reason an in-process seat's is: a headless Lull has no timer and
 //!   reports no clock, so every call of a Lull lands on one tick. It is a
@@ -1831,38 +1833,19 @@ impl External {
                 Phase::Lull => {
                     self.in_process.plan(&mut self.surface);
                     self.writer.flush(&mut self.surface)?;
-                    if !self.surface.seat_is_ready(self.seat) {
+                    // The driver holds the rule: a Lull the outside seat
+                    // has not called ready in is left alone.
+                    if !crate::headless::leave_lull(&mut self.surface, self.seat)? {
                         return Ok(());
-                    }
-                    self.host_line("end lull");
-                    if !self.surface.begin_push()? {
-                        return Err(Error::internal(
-                            "every seat is ready and the match would not leave its Lull",
-                        ));
                     }
                     self.writer.flush(&mut self.surface)?;
                 }
                 Phase::Push => {
-                    while let Some(report) = self.surface.step()? {
-                        if report.segment_ended {
-                            break;
-                        }
-                    }
-                    if self.surface.time().phase == Phase::Push {
-                        return Err(Error::internal(
-                            "the Push would not step to its segment's end",
-                        ));
-                    }
+                    crate::headless::play_push(&mut self.surface)?;
                     self.writer.flush(&mut self.surface)?;
                 }
                 Phase::Recap => {
-                    self.host_line("end recap");
-                    if !self.surface.end_recap()? {
-                        return Err(Error::internal("the match would not leave its recap"));
-                    }
-                    if self.surface.time().phase == Phase::Lull {
-                        self.surface.open_lull()?;
-                    }
+                    crate::headless::leave_recap(&mut self.surface)?;
                     self.writer.flush(&mut self.surface)?;
                 }
                 Phase::Ended | Phase::Lobby | Phase::Unspecified => {
@@ -1871,15 +1854,6 @@ impl External {
                 }
             }
         }
-    }
-
-    /// One audit line for a step the host takes itself, under no subject: the
-    /// log then says who moved the match between the seat's calls.
-    fn host_line(&mut self, action: &'static str) {
-        let tick = self.surface.time().tick;
-        self.surface
-            .audit()
-            .record(tick, None, None, action, crate::audit::Outcome::Ok);
     }
 
     /// Stop on `error`: write the audit log's last lines and keep the error

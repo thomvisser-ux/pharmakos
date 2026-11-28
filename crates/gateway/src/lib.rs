@@ -58,6 +58,7 @@
 //! | [`feed`] | The event bus, the 60 s digest cadence and the opaque cursors |
 //! | [`viewfeed`] | The view's derived, unhashed state: the generated map, the stamps, the entitled bytes |
 //! | [`serve`] | The host loop: one config line in, one announce line out, one surface behind many connections |
+//! | `headless` | The external seat's host's driver: the three boundaries a match with no admin token crosses, and the only caller of a driving method beside the admin handlers (decisions-log item 231) |
 //! | [`probation`] | The match's preset, and the Ledger's memos a Probation match issues |
 //! | [`advice`] | What the built-in operator advises a seat it does not play: the safe playbook and the wizard's suggestions |
 //! | [`cache`] | The private match cache: where it goes, and what is in it |
@@ -139,6 +140,7 @@ pub mod feed;
 pub mod fog;
 pub mod frame;
 pub mod handshake;
+mod headless;
 pub mod host;
 pub mod limit;
 pub mod net;
