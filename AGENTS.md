@@ -29,7 +29,7 @@ spikes are closed, frozen at the `spike-end` tag and deleted from `main`;
 their measured results and their lessons for the skeleton live under `docs/spikes/`, and reading the
 spike code means `git worktree add ../pharmakos-spikes spike-end`. The walking skeleton is closed
 (decisions-log item 126, 2026-09-29), S1 is closed (decisions-log items 139 and 143, 2026-10-16), S2 is
-closed (decisions-log item 155, 2026-10-28), S3 is closed (decisions-log item 226, 2026-11-27), the stage that follows S3 is S4 "Signals", whose first half is "the three towers" (decisions-log item 227), and every crate in §3 has code; mark any value
+closed (decisions-log item 155, 2026-10-28), S3 is closed (decisions-log item 226, 2026-11-27), the stage that follows S3 is S4 "Signals", whose first half is "the three towers" (decisions-log item 227) and is planned in `docs/design/s4-plan.md` (decisions-log item 229), `main` carries `0.4.0-dev` throughout S4 (§9, "Versions and tags"), and every crate in §3 has code; mark any value
 you had to guess with a `PLACEHOLDER` comment naming who fixes it and when.
 
 ---
@@ -45,8 +45,11 @@ to change anything is to walk the **commander** to a **beacon** and interface on
 change*. Beacons are the unit of power and carry **mandates** (Build, Defend, Attack, Mine, Survey);
 units and buildings run **programs**; money is `$` and power is `kW`; the world is destructible
 voxels under a permanent ash sky. Radio exists only once a Radio Mast is earned, carries data and
-never control, and is treated as untrusted input. Everything is deterministic, seeded and hashed, so
-a match replays bit-for-bit on every platform.
+never control, and is treated as untrusted input. From S4, trust in a beacon's machines is earned
+per beacon, by the commander's own hand (its **holdfast**; surety and the first round's match
+setting are the exceptions), and a seat's beacons pass marks by buried cable before radio
+(decisions-log item 229; `docs/design/holdfast.md`). Everything is deterministic, seeded and
+hashed, so a match replays bit-for-bit on every platform.
 
 ## 2. The v1 rule
 
@@ -55,10 +58,15 @@ a match replays bit-for-bit on every platform.
 Three levels of behaviour ship built-in and native: the commander's **operator** (generates a
 playbook, files the safe playbook on a miss, executes whatever the seat sealed), the beacons'
 **mandates**, and the units' and buildings' **programs**. Programs are built in until S4's rule
-cards; from then they are authored as rule cards, each with a built-in default (the basic tower's,
-decisions-log item 227, point 36). The player authors exactly one thing, until S4's rule cards
-(decisions-log item 227): the playbook, a JSONC file (canonical `gp.v1` proto JSON plus comments)
-written in the in-game editor or by hand.
+cards; from then a program is a **rote**, a short numbered list of rule cards that the player can
+open, edit and write (the main session's design; the owner can veto), and each kind of machine
+ships a basic rote as its built-in default (the basic tower's first; decisions-log items 227,
+point 36, and 229; `docs/design/holdfast.md`). Until
+S4's rule cards the player authors exactly one thing, the playbook, a JSONC file (canonical `gp.v1`
+proto JSON plus comments) written in the in-game editor or by hand; from then the player authors
+the playbook **and the rotes it carries** (decisions-log item 229, on the owner's points 20, 28 and
+36): the commander installs a rote at a beacon by hand, as one more row of a visit, and the sealed
+playbook carries the rote inside it (the main session's design; the owner can veto).
 
 **Rule cards** are decided as the form in which a unit's or a structure's program is authored
 (decisions-log item 227, the owner's points 20, 28 and 36; point 28's picked option says "AGENTS.md
@@ -67,9 +75,12 @@ the verifier before the Push, bounded in size and cost, guaranteed to finish, an
 executes. Every ban below stands: no script engine, no script runtime, no interpreter for user
 text; on the main session's reading of point 28's boundary (the owner can veto), a rule card is
 data the Rust sim interprets, as a playbook is. Real code stays out until the cards are proven, and
-then arrives only as another way to write the same tables. Rule cards are not yet built: the first
-build is towers only, in the three towers, the first half of S4 (§10; the owner did not pick
-"Towers and units together", point 36).
+then arrives only as another way to write the same tables. A rote is the same kind of data: a
+closed vocabulary, verified before the Push, bounded, guaranteed to finish, never text that
+executes. Rule cards and rotes are not yet built, and decisions-log item 229 changes no proto seam:
+the `program {builtin|script}` seam below stays reserved and unread. The first build is towers
+only, in the three towers, the first half of S4 (§10; the owner did not pick "Towers and units
+together", point 36).
 
 Consequences that bind every change you make:
 
@@ -756,10 +767,11 @@ of that premise.
 - **Secrecy.** Playbooks, drafts, the seat notebook and the private replay cache never leave the
   gateway for another seat. On a local host this is enforcement, not cryptography: the private match
   cache is plain local state, and the spec says so out loud. Do not claim more.
-- **No filesystem or network access through playbooks or rule cards.** A playbook is data with a
-  closed vocabulary, and so is a rule card (§2, decisions-log item 227). There is no verb that reads
-  a path, opens a socket, shells out or loads code, in either, and none may be added. The template/sample library is a local folder the gateway *reads* to list and
-  instantiate; nothing in it executes.
+- **No access to the host's filesystem or the host's network through playbooks, rule cards or
+  rotes.** A playbook is data with a closed vocabulary, and so are a rule card and a rote (§2,
+  decisions-log items 227 and 229). There is no verb that reads a path, opens a socket, shells out
+  or loads code, in any of them, and none may be added. The template/sample library is a local
+  folder the gateway *reads* to list and instantiate; nothing in it executes.
 - **A player's text is quoted wherever a person is shown it.** Where a person is shown a sentence
   built by `proto`, `plan-core`, the verifier or the gateway, a player's text in it is quoted:
   `Quoted` is the text escaped and capped, and `Said` is built from a `&'static str`, a number, a
@@ -1198,7 +1210,8 @@ view), and is done only when all of this holds:
 The ladder, for orientation: spikes (wk 3) → walking skeleton (18.5) → S1 economy (23.5) →
 S2 destruction & combat (29.5) → S3 authoring (34.5; closed, decisions-log item 226) →
 **S4 "Signals"** (sensing, friend-or-foe, radio marks, fog, then radio warfare; was radio and
-licences), whose first half is "the three towers", the first build of rule cards (§2) → S5
+licences), whose first half is "the three towers", the first build of rule cards (§2), planned in
+`docs/design/s4-plan.md` with its design in `docs/design/holdfast.md` (decisions-log item 229) → S5
 "Commanders" → S6 "Library" → S7 "Watch and share" → hardening → **v1** (decisions-log item 227).
 The AI play harness (the owner's point 38) is built before the towers slice; it is a lane, not a
 milestone. Each stage after S4 is named only, and is detailed when the one before it closes. The
