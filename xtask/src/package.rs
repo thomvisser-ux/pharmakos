@@ -67,9 +67,17 @@ use crate::{
     walk, zip,
 };
 
-/// The version string of every zip until the wk-35.5 release (item 117 (2)).
-/// `[workspace.package] version` stays `0.0.0`.
-pub(crate) const VERSION: &str = "0.1.0-dev+skeleton";
+/// The version string every zip carries: the one source (decisions-log item 142).
+/// Stage-based before 1.0, the minor number the stage (item 228): `0.N.0` closes
+/// stage N, `0.N.P` is a fix, `0.N.0-mK` a milestone build inside stage N, and
+/// `1.0.0` is v1; between tags it is the next version with `-dev`. `release.yml`
+/// reads this line by its exact shape, requires it to be the tag's version for
+/// every tag, and takes the notes from `CHANGELOG.md`'s section headed with it.
+/// The Windows preset in `godot/export_presets.cfg` repeats it, which a test
+/// below holds. A new version is this line, that section and the preset's two
+/// settings in one commit (AGENTS.md section 9, "Versions and tags").
+/// `[workspace.package] version` stays `0.0.0` (item 117 (2); item 228).
+pub(crate) const VERSION: &str = "0.3.0";
 
 /// The folder the zip holds, and the zip's only top-level entry.
 const FOLDER: &str = "Pharmakos";
@@ -2194,6 +2202,87 @@ SPDX-License-Identifier = \"MIT\"
         let path = Path::new("packaging/README.windows.txt.in");
         assert!(unfilled(path, "version 0.1 for you@example").is_ok());
         assert!(unfilled(path, "floor @GLIBC@ here").is_err());
+    }
+
+    /// `VERSION` is the one source (items 142 and 228), and every copy of it
+    /// follows: it has one of the scheme's shapes (a release, `-m<K>` or `-dev`);
+    /// `CHANGELOG.md` has the section `release.yml` takes the notes from, and
+    /// the section says something; the Windows preset stamps it as the product
+    /// version with its numeric core as the file version; and this file holds
+    /// exactly one line of the shape `release.yml`'s `sed` reads, whatever its
+    /// value, since the workflow takes the first such line it finds.
+    #[test]
+    fn the_version_string_is_one_source_and_its_copies_follow_it() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        // The scheme's shapes: three numbers, then nothing (a release),
+        // `-m<K>` (a milestone build) or `-dev` (main between tags). The
+        // first two are the tags release.yml accepts, less the `v`; all
+        // three are inside the shape the workflow asks of VERSION itself.
+        let (core, suffix) = match VERSION.split_once('-') {
+            Some((core, suffix)) => (core, Some(suffix)),
+            None => (VERSION, None),
+        };
+        let parts: Vec<&str> = core.split('.').collect();
+        assert!(
+            parts.len() == 3
+                && parts
+                    .iter()
+                    .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit())),
+            "VERSION's core is <major>.<minor>.<patch>: {VERSION}"
+        );
+        assert!(
+            suffix.is_none_or(|suffix| suffix == "dev"
+                || suffix.strip_prefix('m').is_some_and(|milestone| {
+                    !milestone.is_empty() && milestone.bytes().all(|b| b.is_ascii_digit())
+                })),
+            "VERSION's suffix is `-m<K>` or `-dev`: {VERSION}"
+        );
+        let changelog = fs::read_to_string(root.join(CHANGELOG_FILE)).expect("the changelog");
+        let heading = format!("## {VERSION}");
+        let mut section = changelog
+            .lines()
+            .skip_while(|line| *line != heading)
+            .skip(1)
+            .take_while(|line| !line.starts_with("## "));
+        assert_eq!(
+            changelog.lines().find(|line| line.starts_with("## ")),
+            Some(heading.as_str()),
+            "CHANGELOG.md's first section is `{heading}`, the one release.yml takes the notes from"
+        );
+        assert!(
+            section.any(|line| !line.trim().is_empty()),
+            "CHANGELOG.md's `{heading}` section is empty: it is the whole of the release's notes"
+        );
+        let presets = fs::read_to_string(root.join(GODOT_PROJECT_DIR).join("export_presets.cfg"))
+            .expect("the export presets");
+        for setting in [
+            format!("application/product_version=\"{VERSION}\""),
+            format!("application/file_version=\"{core}.0\""),
+        ] {
+            assert!(
+                presets.lines().any(|line| line == setting),
+                "export_presets.cfg lacks `{setting}`"
+            );
+        }
+        let source = fs::read_to_string(root.join("xtask/src/package.rs")).expect("this file");
+        // release.yml's `sed` matches a whole line, from its first column, of
+        // this shape with any value that holds no quote, and `head -n 1` keeps
+        // the first: so one such line, and its value this constant's.
+        let shaped: Vec<&str> = source
+            .lines()
+            .filter_map(|candidate| {
+                candidate
+                    .strip_prefix("pub(crate) const VERSION: &str = \"")
+                    .and_then(|rest| rest.strip_suffix("\";"))
+                    .filter(|value| !value.contains('"'))
+            })
+            .collect();
+        assert_eq!(
+            shaped,
+            [VERSION],
+            "release.yml reads VERSION from the first line shaped \
+             `pub(crate) const VERSION: &str = \"<value>\";`: exactly one, holding {VERSION}"
+        );
     }
 
     #[test]

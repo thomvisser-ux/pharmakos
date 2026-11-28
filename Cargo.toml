@@ -20,7 +20,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.0"                # stays 0.0.0 until the wk-35.5 v0.1 gate (item 117 (2)); v1 is wk 63.5
+version = "0.0.0"                # stays 0.0.0: a build's version is xtask/src/package.rs's VERSION, the one source (items 117 (2), 142 and 228)
 edition = "2024"
 rust-version = "1.98"            # the pin's minor (S1-01, discharged by S2's `msrv`); see clippy.toml
 license = "GPL-3.0-or-later"     # crates/proto overrides this with MIT OR Apache-2.0
@@ -81,9 +81,9 @@ godot        = { version = "=0.5.5", default-features = false, features = ["api-
 # well as `path`: `cargo deny check bans` has `wildcards = "deny"`, and a path-only
 # dependency is a wildcard to it. The requirement is `"0"` — caret `^0`, i.e.
 # `>=0.0.0, <1.0.0` — and NOT the exact `[workspace.package]` version: an exact pin would
-# stop resolving for every internal edge at once the first time that version is bumped
-# (0.1 at the wk-35.5 gate), with an error that does not point at these lines. Widen it to
-# `"1"` when the workspace reaches 1.0, and not before.
+# stop resolving for every internal edge at once if that version were ever bumped (it
+# stays 0.0.0, item 228 (3) (e)), with an error that does not point at these lines. If the
+# workspace version ever reaches 1.0, widen this to `"1"`, and not before.
 pharmakos-mesher = { path = "crates/mesher", version = "0" }
 pharmakos-proto  = { path = "crates/proto", version = "0" }
 pharmakos-sim       = { path = "crates/sim", version = "0", default-features = false }

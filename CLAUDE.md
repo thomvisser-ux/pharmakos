@@ -64,7 +64,8 @@ mechanism rather than speeding it up.
 **Owner's delegation for the walking skeleton, S1, S2, S3 and S4 (decisions-log
 §2.7 items 85, 86, 116 (2) and (9), and 120, from 2026-09-14; renewed for S1 by item 126 (2) (g),
 2026-09-29, for S2 by item 141, 2026-10-14, for S3 by item 152, 2026-10-28, and for the stage that
-follows S3 by item 226, 2026-11-27, that stage being S4 "Signals" by item 227).** Two relaxations apply to the owner's own Claude Code session only (the
+follows S3 by item 226, 2026-11-27, that stage being S4 "Signals" by item 227 and its end S4's
+stage demo by item 228).** Two relaxations apply to the owner's own Claude Code session only (the
 second also to the agents it launches), for the duration of the walking skeleton; of S1, which runs
 from the skeleton's close (item 126) to S1's stage demo; and of S2, which runs from S1's close (items
 139 and 143: S1 closed on 2026-10-16, when its last lane, `fixd`, had merged and `main`'s push run
@@ -74,9 +75,10 @@ between S1's stage demo and S1's close (item 141 (1)). On 2026-10-28, with S2's 
 said the delegation runs into S3 (item 152), so it ran on through S3 to S3's stage demo. At S3's
 stage demo review, on 2026-11-27, the owner renewed it (decisions-log item 226 (4)), and it now
 runs on through S4 (the stage that follows S3, named by item 227) to S4's stage demo. That end
-point is the main session's reading of item 226 (4) after the re-cut (**decided; the owner can
-veto**): the three towers' close, which the owner plays (item 227, point 39), is a milestone review
-inside S4, at which the owner can revoke the delegation as at any time. Its terms change only by a
+point is the owner's answer to point 42, "At S4's stage demo (Recommended)" (decisions-log item
+228): it runs through both halves of S4, and the three towers' close, which the owner plays (item
+227, point 39), is a milestone review inside S4, at which the owner can revoke the delegation as at
+any time. Its terms change only by a
 widening the owner approves. The owner's answers to points 30 and 33 of item 227 (the reviews by
 risk of AGENTS.md §6, and "What is asked and what is told" below) are standing rules, not terms of
 the delegation, and do not lapse at a stage's demo: point 30's rules took effect when its AGENTS.md
@@ -117,17 +119,16 @@ session never merges, on its own word, a change to a point the decisions log res
 or to something the owner ruled; it keeps building everything else, holds that piece, and brings
 the questions to the owner as a batch (decisions-log item 168 (12)).
 
-**What is asked and what is told** (decisions-log item 227, the owner's answer to point 33). The
-main session decides these and tells the owner in a short list the owner can veto, rather than
-asking: keeping a tuning value as built; re-dating a marker; spec or AGENTS.md edits that only make
-the text match what was built or what the owner already ruled; and how a test or measurement is
-run. It always asks about anything that changes what the player experiences, scope, lore, a rule of
-the project, risk the owner would carry, and anything the owner ruled before. Item 168 (12)'s
-hold-and-batch, the paragraph above, still governs what is asked. Where the two meet, on the main
-session's reading of point 33 (the owner can veto; held for the owner's confirmation, item 227):
-the four told kinds are told even where a marker or a sentence names the owner, because the owner
-approved them as told in point 33; a change to what the owner ruled, or to a value the owner
-reserved, is never one of them and stays under item 168 (12).
+**What is asked and what is told** (decisions-log items 227 and 228, the owner's answers to
+points 33 and 43). The main session decides routine housekeeping and tells the owner; it asks about
+anything that changes the game, the plan, the rules, or something the owner already decided. That
+sentence is the main session's reading of the owner's answer to point 43, "keep it simple" (the
+owner can veto). The housekeeping is the four kinds the owner approved in point 33, told in a short
+list the owner can veto: keeping a tuning value as built; re-dating a marker; spec or AGENTS.md
+edits that only make the text match what was built or what the owner already ruled; and how a test
+or measurement is run. On the same reading of point 43, the four are told even where a marker or a
+sentence names the owner; a change to what the owner ruled, or to a value the owner reserved, is
+never one of them. Item 168 (12), the paragraph above, still governs what is held and asked.
 
 ## Commands
 

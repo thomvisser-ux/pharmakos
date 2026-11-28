@@ -57,8 +57,10 @@ script seams are reserved in the proto and never read. The sim is deterministic 
 maths, hashed every tick. Build plan: through S3 as the spec's weeks; after S3, S4 "Signals",
 whose first half is "the three towers", then S5 "Commanders", S6 "Library", S7 "Watch and
 share", hardening and v1, each detailed when the one before it closes and dated per stage, their
-earlier contents carried as inputs; the fun gate moves to after the first new-core milestone, and
-v0.1's build and place are held with the versioning scheme (decisions-log item 227). From S4 a
+earlier contents carried as inputs; the fun gate moves to after the first new-core milestone
+(decisions-log item 227). Versions are stage-based before 1.0, the minor number the stage: S3's
+build is v0.3.0, the three towers' v0.4.0-m1 and S4's close v0.4.0, and the public preview is
+whichever version passes the fun gate, the public v0.1 being retired (item 228). From S4 a
 unit's or a structure's program is authored as rule cards, which are data like playbooks; the
 first build is towers only (item 227, the owner's points 20, 28 and 36).
 
