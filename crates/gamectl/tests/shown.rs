@@ -48,6 +48,11 @@ fn a_path_an_operand_or_a_name_the_user_typed_is_printed_escaped() {
         strings::scenario_passed(HOSTILE, 1),
         strings::seeds_refused(HOSTILE, "why"),
         strings::result_written(HOSTILE, 1, 0),
+        strings::arena_layout(HOSTILE),
+        strings::scenario_playbook_changed(0, HOSTILE, 2),
+        strings::arena_playbook_refused(0, HOSTILE, 1, "why"),
+        strings::arena_written(HOSTILE, 1),
+        strings::operator_unused("arena", HOSTILE),
         // `verify --preset`'s refusals (fix pass 1 of #219, item 12): the
         // gateway's sentence is a leaf, escaped once more where it is said,
         // which leaves text the gateway already escaped as it was.

@@ -1,0 +1,49 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// An arena match-up (decisions-log item 233; scenarios/README.md): the three
+// kinds of contestant, the built-in operator, a playbook and the safe
+// playbook. `gamectl arena` plays them against each other over a seed file,
+// each seed once per rotation of the contestants over the seats, and
+// crates/gamectl/tests/arena.rs plays it over ../nightly/fixture/two.seeds.txt
+// for the arena result's golden
+// (tests/golden/scenarios/arena-result/expected.result.json): six matches of
+// two one-minute rounds.
+//
+// A match-up lives under scenarios/arena/, so both readers hold it to a
+// match-up's rules: two or three seats, none of them `sealed`, and no hash
+// chain, because the arena replaces the map seed. Its event assertion is what
+// `gamectl scenario run` checks on the file's own seed.
+//
+// What the golden depends on: the placeholder playbook, Easy
+// (crates/operator), the template library (library/), the rules table and the
+// two seeds. A change to any of them may move the result, and the pull
+// request that moves it says which.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "arena-result",
+  "summary": "Two one-minute rounds of Easy, the nightly placeholder playbook and the safe playbook: the match-up the arena result's golden is played from.",
+
+  "map": {
+    "seed": "0x00000000ca5caded",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+  "round_limit": 2,
+
+  "seats": [
+    { "seat": 0, "kind": "builtin" },
+    { "seat": 1, "kind": "playbook", "playbook": "scenarios/nightly/placeholder.playbook.jsonc" },
+    { "seat": 2, "kind": "safe" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 60000, "note": "Each of the two rounds: 1 200 ticks." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "plan_sealed", "seat": 1, "by_tick": 1,
+      "note": "The playbook contestant's file went through submit_plan and was sealed." }
+  ]
+}

@@ -114,9 +114,24 @@ pub struct SeedResult {
 /// count past a `u32`: each is the sim, the gateway and this runner
 /// disagreeing, never a launch to leave out.
 pub fn launches_of(events: &[Fired], rounds: u32) -> Result<[Vec<u32>; 2], Failure> {
+    <[Vec<u32>; 2]>::try_from(launches_by_seat(events, rounds, 2)?)
+        .map_err(|_| Failure::internal("two seats' launches are not two lists"))
+}
+
+/// [`launches_of`] for a match of `seats` seats, one list a seat: the arena's
+/// matches seat two or three.
+///
+/// # Errors
+///
+/// As [`launches_of`], for a seat past the `seats` the match has.
+pub fn launches_by_seat(
+    events: &[Fired],
+    rounds: u32,
+    seats: usize,
+) -> Result<Vec<Vec<u32>>, Failure> {
     let width = usize::try_from(rounds)
         .map_err(|_| Failure::internal("a match of more rounds than this platform counts"))?;
-    let mut launches = [vec![0_u32; width], vec![0_u32; width]];
+    let mut launches = vec![vec![0_u32; width]; seats];
     for fired in events.iter().filter(|fired| fired.kind == LAUNCHED) {
         let refused = |why: &str| {
             Failure::internal(format!(
@@ -127,7 +142,7 @@ pub fn launches_of(events: &[Fired], rounds: u32) -> Result<[Vec<u32>; 2], Failu
         let seat = fired.seat.ok_or_else(|| refused("names no seat"))?;
         let per_round = launches.get_mut(usize::from(seat)).ok_or_else(|| {
             refused(&format!(
-                "names seat {seat}, and an arm's match seats 0 and 1"
+                "names seat {seat}, and the match seats {seats} seat(s), from 0"
             ))
         })?;
         let slot = usize::try_from(fired.round)
@@ -151,12 +166,37 @@ pub fn launches_of(events: &[Fired], rounds: u32) -> Result<[Vec<u32>; 2], Failu
 /// [`Exit::Internal`] for a hunt filed by a seat an arm's match does not
 /// have.
 pub fn hunts_of(hunts: &crate::scenario::run::Hunts) -> Result<[usize; 2], Failure> {
-    if let Some((beacon, seat)) = hunts.filed.iter().find(|(_, seat)| **seat > 1) {
+    <[usize; 2]>::try_from(hunts_by_seat(hunts, 2)?)
+        .map_err(|_| Failure::internal("two seats' hunts are not two counts"))
+}
+
+/// [`hunts_of`] for a match of `seats` seats, one count a seat.
+///
+/// # Errors
+///
+/// [`Exit::Internal`] for a hunt filed by a seat the match does not have, or
+/// a seat count past a seat id.
+pub fn hunts_by_seat(
+    hunts: &crate::scenario::run::Hunts,
+    seats: usize,
+) -> Result<Vec<usize>, Failure> {
+    if let Some((beacon, seat)) = hunts
+        .filed
+        .iter()
+        .find(|(_, seat)| usize::from(**seat) >= seats)
+    {
         return Err(Failure::internal(format!(
-            "a hunt (beacon {beacon}) was filed by seat {seat}, and an arm's match seats 0 and 1"
+            "a hunt (beacon {beacon}) was filed by seat {seat}, and the match seats {seats} \
+             seat(s), from 0"
         )));
     }
-    Ok([hunts.unlaunched_of(0), hunts.unlaunched_of(1)])
+    (0..seats)
+        .map(|seat| {
+            u8::try_from(seat)
+                .map(|seat| hunts.unlaunched_of(seat))
+                .map_err(|_| Failure::internal("a match of more seats than a seat id counts"))
+        })
+        .collect()
 }
 
 /// The event kind a launch is (`EventKind::AttackLaunched`'s name).
@@ -234,7 +274,11 @@ pub fn run(root: &Path, source: &Path, options: &RunOptions) -> Result<String, F
 }
 
 /// Read and decode the seed file, its size checked before it is read.
-fn read_seeds(root: &Path, relative: &Path, shown: &str) -> Result<Vec<Listed>, Failure> {
+pub(crate) fn read_seeds(
+    root: &Path,
+    relative: &Path,
+    shown: &str,
+) -> Result<Vec<Listed>, Failure> {
     use std::io::Read as _;
     let path = root.join(relative);
     let unreadable = |error: std::io::Error| {
@@ -369,11 +413,11 @@ pub fn summarise(seeds_played: &[SeedResult]) -> Result<Summary, Failure> {
     })
 }
 
-fn number(value: &dyn std::fmt::Display) -> Json {
+pub(crate) fn number(value: &dyn std::fmt::Display) -> Json {
     Json::Number(value.to_string())
 }
 
-fn text(value: &str) -> Json {
+pub(crate) fn text(value: &str) -> Json {
     Json::String(value.to_owned())
 }
 
@@ -381,7 +425,7 @@ fn text(value: &str) -> Json {
 /// written by the project's own JSON writer (so a string's escapes are its),
 /// whose layout puts a newline after every value and so cannot lay a seed
 /// out on one line.
-fn compact(value: &Json) -> String {
+pub(crate) fn compact(value: &Json) -> String {
     match value {
         Json::Object(members) => {
             let inner: Vec<String> = members
@@ -568,7 +612,7 @@ pub fn render_text(result: &NightlyResult) -> String {
     out
 }
 
-fn write_result(path: &Path, rendered: &str) -> Result<(), Failure> {
+pub(crate) fn write_result(path: &Path, rendered: &str) -> Result<(), Failure> {
     let shown = crate::display(path);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| {
@@ -576,8 +620,15 @@ fn write_result(path: &Path, rendered: &str) -> Result<(), Failure> {
         })?;
     }
     // `write` and not a formatting writer, for the reason `run.rs` gives: the
-    // text is already the bytes, LF endings and all.
-    std::fs::write(path, rendered.as_bytes()).map_err(|error| {
+    // text is already the bytes, LF endings and all. A result ends its last
+    // line, in a file as on standard output: the JSON form already does, and
+    // the text form gains its newline here.
+    let ended = if rendered.ends_with('\n') {
+        rendered.to_owned()
+    } else {
+        format!("{rendered}\n")
+    };
+    std::fs::write(path, ended.as_bytes()).map_err(|error| {
         Failure::new(
             Exit::Internal,
             strings::result_unwritable(&shown, &error.to_string()),

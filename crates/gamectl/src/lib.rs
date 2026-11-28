@@ -6,7 +6,9 @@
 //!
 //! Spec §12's five commands — `verify`, `schema`, `docs`, `scenario run`,
 //! `seat doctor` — `host`, which serves one match to the Godot client over
-//! this process's own stdio pipe (decisions-log item 107 (2); [`host`]), and
+//! this process's own stdio pipe (decisions-log item 107 (2); [`host`]),
+//! `arena`, which plays a scenario's seats against each other over a seed
+//! file (decisions-log item 233; [`scenario::arena`]), and
 //! the experimental `match` commands, the external seat: one seat of a
 //! headless match played by a program outside the game (decisions-log item
 //! 231; [`external`]).
@@ -143,6 +145,7 @@ fn dispatch(invocation: &cli::Invocation) -> Result<String, Failure> {
         Command::Schema { part } => schema::run(part),
         Command::Docs => docs::run(),
         Command::ScenarioRun { path, options } => scenario::run::command(root, path, options),
+        Command::Arena { path, options } => scenario::arena::run(root, path, options),
         Command::SeatDoctor => doctor::run(root),
     };
     rendered.map(with_newline)

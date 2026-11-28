@@ -158,7 +158,7 @@ fn easy_through_the_external_door_plays_the_match_easy_plays_in_process() {
             seat: None,
             by_tick: u32::MAX,
         }],
-        nightly: true,
+        home: scenario::Home::Arm,
     };
     let (in_process, ending) =
         scenario::run::play_to_end(&root, &scenario).expect("the in-process match plays");
@@ -368,7 +368,7 @@ fn sealed_replay_of(dir: &Path) -> Scenario {
             seat: None,
             by_tick: u32::MAX,
         }],
-        nightly: true,
+        home: scenario::Home::Arm,
     }
 }
 

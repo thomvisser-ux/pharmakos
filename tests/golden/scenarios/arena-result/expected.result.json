@@ -1,0 +1,25 @@
+{
+  "format": "pharmakos.arena-result.v1",
+  "scenario": "arena-result",
+  "source": "scenarios/arena/three-way.scenario.jsonc",
+  "seed_file": "scenarios/nightly/fixture/two.seeds.txt",
+  "rules_hash": "641055eb0d38815a",
+  "contestants": [
+    {"contestant": 0, "kind": "builtin", "operator": "easy"},
+    {"contestant": 1, "kind": "playbook", "playbook": "scenarios/nightly/placeholder.playbook.jsonc", "plan_fingerprint": "3b088cd612bfaadc"},
+    {"contestant": 2, "kind": "safe"}
+  ],
+  "matches": [
+    {"seed": "0x0102030405060708", "rotation": 0, "contestant_by_seat": [0, 1, 2], "winners": [0], "winning_contestants": [0], "end_reason": "round_limit", "end_tick": 2400, "rounds": 2, "launches": [[0, 0], [0, 0], [0, 0]], "hunts_unlaunched": [0, 0, 0], "audit": [{"seat": 0, "held": 625, "destroyed": 0, "beacons_lost": 0}, {"seat": 1, "held": 620, "destroyed": 0, "beacons_lost": 0}, {"seat": 2, "held": 621, "destroyed": 0, "beacons_lost": 0}]},
+    {"seed": "0x0102030405060708", "rotation": 1, "contestant_by_seat": [2, 0, 1], "winners": [2], "winning_contestants": [1], "end_reason": "round_limit", "end_tick": 2400, "rounds": 2, "launches": [[0, 0], [0, 0], [0, 0]], "hunts_unlaunched": [0, 0, 0], "audit": [{"seat": 0, "held": 621, "destroyed": 0, "beacons_lost": 0}, {"seat": 1, "held": 616, "destroyed": 0, "beacons_lost": 0}, {"seat": 2, "held": 629, "destroyed": 0, "beacons_lost": 0}]},
+    {"seed": "0x0102030405060708", "rotation": 2, "contestant_by_seat": [1, 2, 0], "winners": [0, 1], "winning_contestants": [1, 2], "end_reason": "round_limit", "end_tick": 2400, "rounds": 2, "launches": [[0, 0], [0, 0], [0, 0]], "hunts_unlaunched": [0, 0, 0], "audit": [{"seat": 0, "held": 613, "destroyed": 0, "beacons_lost": 0}, {"seat": 1, "held": 613, "destroyed": 0, "beacons_lost": 0}, {"seat": 2, "held": 612, "destroyed": 0, "beacons_lost": 0}]},
+    {"seed": "0x00000000ca5caded", "rotation": 0, "contestant_by_seat": [0, 1, 2], "winners": [1], "winning_contestants": [1], "end_reason": "round_limit", "end_tick": 2400, "rounds": 2, "launches": [[0, 0], [0, 0], [0, 0]], "hunts_unlaunched": [0, 0, 0], "audit": [{"seat": 0, "held": 617, "destroyed": 0, "beacons_lost": 0}, {"seat": 1, "held": 625, "destroyed": 0, "beacons_lost": 0}, {"seat": 2, "held": 612, "destroyed": 0, "beacons_lost": 0}]},
+    {"seed": "0x00000000ca5caded", "rotation": 1, "contestant_by_seat": [2, 0, 1], "winners": [1, 2], "winning_contestants": [0, 1], "end_reason": "round_limit", "end_tick": 2400, "rounds": 2, "launches": [[0, 0], [0, 0], [0, 0]], "hunts_unlaunched": [0, 0, 0], "audit": [{"seat": 0, "held": 614, "destroyed": 0, "beacons_lost": 0}, {"seat": 1, "held": 620, "destroyed": 0, "beacons_lost": 0}, {"seat": 2, "held": 620, "destroyed": 0, "beacons_lost": 0}]},
+    {"seed": "0x00000000ca5caded", "rotation": 2, "contestant_by_seat": [1, 2, 0], "winners": [2], "winning_contestants": [0], "end_reason": "round_limit", "end_tick": 2400, "rounds": 2, "launches": [[0, 0], [0, 0], [0, 0]], "hunts_unlaunched": [0, 0, 0], "audit": [{"seat": 0, "held": 621, "destroyed": 0, "beacons_lost": 0}, {"seat": 1, "held": 617, "destroyed": 0, "beacons_lost": 0}, {"seat": 2, "held": 624, "destroyed": 0, "beacons_lost": 0}]}
+  ],
+  "standings": [
+    {"contestant": 0, "matches": 6, "wins": 2, "shared": 1, "losses": 3, "win_rate_percent": 33, "wins_by_seat": [1, 0, 1]},
+    {"contestant": 1, "matches": 6, "wins": 2, "shared": 2, "losses": 2, "win_rate_percent": 33, "wins_by_seat": [0, 1, 1]},
+    {"contestant": 2, "matches": 6, "wins": 0, "shared": 1, "losses": 5, "win_rate_percent": 0, "wins_by_seat": [0, 0, 0]}
+  ]
+}

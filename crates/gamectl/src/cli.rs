@@ -56,9 +56,10 @@ pub struct CommandRow {
 ///
 /// Spec §12's list, in full: `verify`, `schema`, `docs`, `scenario run`,
 /// `seat doctor` — `host`, the child process the Godot lobby spawns
-/// (decisions-log item 107 (2)), and `match`, the experimental external
-/// seat, one row a subcommand (decisions-log item 231). Nothing else, and in
-/// particular no `connect`.
+/// (decisions-log item 107 (2)), `arena`, a scenario's seats played against
+/// each other over a seed file (decisions-log item 233), and `match`, the
+/// experimental external seat, one row a subcommand (decisions-log item
+/// 231). Nothing else, and in particular no `connect`.
 pub const COMMANDS: &[CommandRow] = &[
     CommandRow {
         name: "verify",
@@ -80,6 +81,13 @@ pub const COMMANDS: &[CommandRow] = &[
         usage: "scenario run <file>",
         about: "play a scenario headless and check its assertions on events and hashes; with \
                 --seeds, play an arm over a seed set and write a result instead",
+    },
+    CommandRow {
+        name: "arena",
+        usage: "arena <file> --seeds <file>",
+        about: "play a scenario's seats against each other as contestants over the seed file \
+                --seeds names, every seed once from every seat, each match to its end, and \
+                write who won how often",
     },
     CommandRow {
         name: "seat",
@@ -223,6 +231,31 @@ pub const OPTIONS: &[OptionRow] = &[
         flag: "--out",
         command: "scenario",
         about: "the file a run over --seeds writes its result to (default: standard output)",
+    },
+    OptionRow {
+        spelling: "    --operator <easy>",
+        flag: "--operator",
+        command: "arena",
+        about: "the built-in operator a `builtin` contestant plays (default: easy)",
+    },
+    OptionRow {
+        spelling: "    --seeds <file>",
+        flag: "--seeds",
+        command: "arena",
+        about: "the seed file, which the arena needs: every seed is played once per rotation of \
+                the contestants over the seats, each seed replacing the scenario's map seed",
+    },
+    OptionRow {
+        spelling: "    --format <text|json>",
+        flag: "--format",
+        command: "arena",
+        about: "how the arena writes its result (default: text)",
+    },
+    OptionRow {
+        spelling: "    --out <path>",
+        flag: "--out",
+        command: "arena",
+        about: "the file the arena writes its result to (default: standard output)",
     },
     OptionRow {
         spelling: "    --dir <dir>",
@@ -371,6 +404,15 @@ pub enum Command {
         /// The `.scenario.jsonc` file to play.
         path: PathBuf,
         /// `--operator`, `--seeds`, `--format` and `--out`.
+        options: RunOptions,
+    },
+    /// Play a scenario's seats against each other over a seed file
+    /// (decisions-log item 233).
+    Arena {
+        /// The `.scenario.jsonc` file whose seats are the contestants.
+        path: PathBuf,
+        /// `--seeds`, which it needs, and `--operator`, `--format` and
+        /// `--out`.
         options: RunOptions,
     },
     /// Check this installation.
@@ -690,36 +732,15 @@ fn command_of(
             no_operands("docs", rest)?;
             Ok(Command::Docs)
         }
-        "scenario" => {
-            let Some((sub, rest)) = rest.split_first() else {
-                return Err(Failure::usage(strings::missing_operand(
-                    "scenario",
-                    "subcommand (`run`)",
-                )));
-            };
-            let sub = sub.to_string_lossy().into_owned();
-            if sub != "run" {
-                return Err(Failure::usage(strings::unknown_subcommand(
-                    "scenario", &sub,
-                )));
+        "scenario" => scenario_command(rest, options),
+        "arena" => {
+            let path = one_operand("arena", "scenario file", rest)?;
+            // The seed file is what the arena plays over: without it there is
+            // no match to play, and no default set to play instead.
+            if options.seeds.is_none() {
+                return Err(Failure::usage(strings::flag_missing("arena", "--seeds")));
             }
-            let path = one_operand("scenario run", "scenario file", rest)?;
-            // `--format` and `--out` shape the result a run over a seed file
-            // writes; without `--seeds` there is no result, so each is refused
-            // rather than ignored, as a flag given to the wrong command is.
-            for (flag, given) in [
-                ("--format", options.format.is_some()),
-                ("--out", options.out.is_some()),
-            ] {
-                if given && options.seeds.is_none() {
-                    return Err(Failure::usage(strings::flag_needs(
-                        "scenario run",
-                        flag,
-                        "--seeds",
-                    )));
-                }
-            }
-            Ok(Command::ScenarioRun { path, options })
+            Ok(Command::Arena { path, options })
         }
         "seat" => {
             let Some((sub, rest)) = rest.split_first() else {
@@ -742,6 +763,39 @@ fn command_of(
         "match" => match_command(rest, seat),
         other => Err(Failure::usage(strings::unknown_command(other))),
     }
+}
+
+/// `scenario run <file>`, with the flags a run over a seed file reads.
+fn scenario_command(rest: &[OsString], options: RunOptions) -> Result<Command, Failure> {
+    let Some((sub, rest)) = rest.split_first() else {
+        return Err(Failure::usage(strings::missing_operand(
+            "scenario",
+            "subcommand (`run`)",
+        )));
+    };
+    let sub = sub.to_string_lossy().into_owned();
+    if sub != "run" {
+        return Err(Failure::usage(strings::unknown_subcommand(
+            "scenario", &sub,
+        )));
+    }
+    let path = one_operand("scenario run", "scenario file", rest)?;
+    // `--format` and `--out` shape the result a run over a seed file
+    // writes; without `--seeds` there is no result, so each is refused
+    // rather than ignored, as a flag given to the wrong command is.
+    for (flag, given) in [
+        ("--format", options.format.is_some()),
+        ("--out", options.out.is_some()),
+    ] {
+        if given && options.seeds.is_none() {
+            return Err(Failure::usage(strings::flag_needs(
+                "scenario run",
+                flag,
+                "--seeds",
+            )));
+        }
+    }
+    Ok(Command::ScenarioRun { path, options })
 }
 
 /// The subcommands `match` has, in the order a refusal names them.
@@ -901,6 +955,7 @@ mod tests {
             match row.name {
                 "verify" => args.push("a.jsonc"),
                 "scenario" => args.extend(["run", "a.scenario.jsonc"]),
+                "arena" => args.extend(["a.scenario.jsonc", "--seeds", "s.txt"]),
                 "seat" => args.push("doctor"),
                 // One row a subcommand: the usage's second word is the verb.
                 "match" => {
@@ -956,6 +1011,46 @@ mod tests {
             &["scenario"],
             &["scenario", "run"],
             &["seat"],
+            &["arena"],
+            &["arena", "--seeds", "s.txt"],
+            // The seed file is what the arena plays over: none is no run.
+            &["arena", "a.scenario.jsonc"],
+            &["arena", "a.scenario.jsonc", "--format", "json"],
+        ] {
+            assert_eq!(parsed(args), Err(Exit::Usage), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn the_arena_takes_a_scenario_a_seed_file_and_the_result_s_flags() {
+        use super::{Operator, RunOptions};
+        assert_eq!(
+            parsed(&[
+                "arena",
+                "a.scenario.jsonc",
+                "--seeds",
+                "s.txt",
+                "--operator",
+                "easy",
+                "--format",
+                "json",
+                "--out",
+                "r.json",
+            ]),
+            Ok(Command::Arena {
+                path: "a.scenario.jsonc".into(),
+                options: RunOptions {
+                    operator: Some(Operator::Easy),
+                    seeds: Some("s.txt".into()),
+                    format: Some(Format::Json),
+                    out: Some("r.json".into()),
+                },
+            })
+        );
+        for args in [
+            &["arena", "a", "b", "--seeds", "s.txt"][..],
+            &["arena", "a", "--seeds", "s.txt", "--depth", "quick"],
+            &["arena", "a", "--seeds", "s.txt", "--dir", "d"],
         ] {
             assert_eq!(parsed(args), Err(Exit::Usage), "{args:?}");
         }
@@ -1016,6 +1111,7 @@ mod tests {
                 "verify" => vec!["verify", "a.jsonc"],
                 "schema" => vec!["schema"],
                 "scenario" => vec!["scenario", "run", "a.scenario.jsonc", "--seeds", "s.txt"],
+                "arena" => vec!["arena", "a.scenario.jsonc", "--seeds", "s.txt"],
                 "match" => vec!["match", "new", "--dir", "d"],
                 "" => vec!["docs"],
                 other => panic!("a command the table names and this test does not: {other}"),
@@ -1046,9 +1142,10 @@ mod tests {
                 continue;
             }
             let mut args = command_for(row.command);
-            // `--seeds` already stands in the scenario line, and `--dir` in
-            // the match line; adding it once more is the repeat.
-            if !(row.flag == "--seeds" && row.command == "scenario") && row.flag != "--dir" {
+            // `--seeds` already stands in the scenario line and the arena's,
+            // and `--dir` in the match line; adding it once more is the
+            // repeat.
+            if row.flag != "--seeds" && row.flag != "--dir" {
                 args.extend([row.flag, value_for(row.flag)]);
             }
             args.extend([row.flag, value_for(row.flag)]);
@@ -1064,8 +1161,9 @@ mod tests {
             checked = checked.saturating_add(1);
         }
         assert_eq!(
-            checked, 15,
-            "every row that takes a value, verify's and scenario's --format both, and the six \
+            checked, 19,
+            "every row that takes a value, verify's, scenario's and the arena's --format each, the \
+             arena's --operator, --seeds and --out beside scenario's, and the six \
              the match commands read"
         );
     }

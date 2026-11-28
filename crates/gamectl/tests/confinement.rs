@@ -36,6 +36,7 @@ const SOURCES: &[&str] = &[
     "src/main.rs",
     "src/rules.rs",
     "src/scenario.rs",
+    "src/scenario/arena.rs",
     "src/scenario/nightly.rs",
     "src/scenario/run.rs",
     "src/scenario/seeds.rs",
@@ -974,6 +975,16 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
         "external.rs",
         "(\"--rounds\", rounds.unwrap_or(DEFAULT_ROUNDS)),",
         "the documented default: `match new` with no `--rounds`, the lobby's round limit",
+    ),
+    (
+        "arena.rs",
+        "let operator = options.operator.unwrap_or(Operator::Easy);",
+        "the documented default: a `builtin` contestant plays Easy, the one operator this build has",
+    ),
+    (
+        "arena.rs",
+        "let rendered = match options.format.unwrap_or(Format::Text) {",
+        "the documented default: `--format text`",
     ),
     (
         "nightly.rs",

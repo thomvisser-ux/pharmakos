@@ -3440,12 +3440,20 @@ fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
     // the seed set (S2's plan, E20). `collect_played` is the list this step
     // and `cargo xtask package`'s replay both play.
     let played = scenario::collect_played(&ctx.root)?;
-    let arms = valid.iter().filter(|item| item.nightly).count();
-    let to_play = valid.iter().filter(|item| !item.nightly).count();
+    let played_here = |item: &scenario::Scenario| item.home == scenario::Home::Scenario;
+    let arms = valid
+        .iter()
+        .filter(|item| item.home == scenario::Home::Arm)
+        .count();
+    let match_ups = valid
+        .iter()
+        .filter(|item| item.home == scenario::Home::MatchUp)
+        .count();
+    let to_play = valid.iter().filter(|item| played_here(item)).count();
     // On a shard, every file is validated above and only the shard's part is
     // played, keyed by its relative path (`scenario_shard_key`).
     let mine = |item: &scenario::Scenario| scenario_on_shard(ctx.shard, &item.relative);
-    for item in valid.iter().filter(|item| !item.nightly) {
+    for item in valid.iter().filter(|item| played_here(item)) {
         if !played.iter().any(|path| path.ends_with(&item.relative)) {
             return Err(format!(
                 "{checked}; {} is validated and not in the played list, which is the step and \
@@ -3469,14 +3477,15 @@ fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
     }
     let ran = valid
         .iter()
-        .filter(|item| !item.nightly && mine(item))
+        .filter(|item| played_here(item) && mine(item))
         .count();
 
     let part = match ctx.shard {
         Some(shard) if ran == 0 => {
             return Ok(Outcome::Done(format!(
                 "{checked}; none of the {to_play} played scenario(s) falls to shard {shard}, so \
-                 this shard played none; {arms} nightly arm(s) valid"
+                 this shard played none; {arms} nightly arm(s) and {match_ups} arena \
+                 match-up(s) valid"
             )));
         }
         Some(shard) => format!("shard {shard} played {ran} of {to_play}; "),
@@ -3484,7 +3493,8 @@ fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
     };
     Ok(Outcome::Done(format!(
         "{part}{ran} scenario(s) pass on their event and hash assertions; {arms} nightly arm(s) \
-         valid, played by the nightly workflow and not here"
+         valid, played by the nightly workflow and not here; {match_ups} arena match-up(s) valid, \
+         played by `gamectl arena` and its tests and not here"
     )))
 }
 

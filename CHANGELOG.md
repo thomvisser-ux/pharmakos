@@ -28,6 +28,11 @@ to that tag's version.
   which seals a folder of a match's per-round sealed playbooks through `submit_plan` again, and
   the optional `segment_lengths_ms` key, a match's segment length list. A match played through
   the external seat is kept as a scenario by copying its folders (decisions-log item 232).
+- **`gamectl arena`.** `gamectl arena <file> --seeds <file>` plays a scenario's seats against
+  each other as contestants (a playbook, the built-in operator or the safe playbook; two or
+  three), every seed once from every seat, and writes who won how often and from which seat
+  (`--format json`: `pharmakos.arena-result.v1`). Match-ups written for it live under
+  `scenarios/arena/` (decisions-log item 233).
 
 ## 0.3.0
 
