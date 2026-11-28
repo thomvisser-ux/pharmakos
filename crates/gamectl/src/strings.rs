@@ -487,6 +487,27 @@ pub fn match_stopped(why: &str) -> String {
     format!("{BINARY} match: the match stopped: {why}")
 }
 
+/// A `match` command in a folder another command holds.
+#[must_use]
+pub fn match_in_use(lock: &str) -> String {
+    let lock = pharmakos_proto::json::grammar::escaped(lock);
+    format!(
+        "{BINARY} match: another command holds this match (`{lock}` is there), and two at once \
+         would each write over the other. If no `{BINARY}` is running on this folder, one was \
+         killed while it held the match: remove that file and go on."
+    )
+}
+
+/// A lock file that could not be removed as its command ended.
+#[must_use]
+pub fn match_lock_left(lock: &str, why: &str) -> String {
+    let lock = pharmakos_proto::json::grammar::escaped(lock);
+    format!(
+        "{BINARY} match: `{lock}` could not be removed ({why}); remove it by hand, or the next \
+         command is refused."
+    )
+}
+
 /// A `match` command in a folder whose match has ended.
 #[must_use]
 pub fn match_ended(result: &str) -> String {

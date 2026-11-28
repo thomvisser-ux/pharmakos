@@ -420,6 +420,56 @@ fn a_match_is_started_played_and_put_down_one_command_at_a_time() {
 }
 
 #[test]
+fn one_command_at_a_time_holds_a_match() {
+    let dir = fresh_dir("lock");
+    let at = dir_arg(&dir);
+    let new = gamectl(&["match", "new", "--dir", &at]);
+    assert_eq!(new.code, Exit::Ok, "{}", new.err);
+    let lock = dir.join(external::LOCK_FILE);
+    assert!(!lock.exists(), "a finished command left its lock behind");
+
+    // A command that finds the lock there is refused, changes nothing, and
+    // leaves the lock it did not make.
+    std::fs::write(&lock, "").expect("the lock");
+    let save = dir.join("matches").join(MATCH_ID).join("save.json");
+    let before = std::fs::read(&save).expect("the save");
+    for command in [
+        vec!["match", "call", "get_status", "--dir", &at],
+        vec!["match", "brief", "--dir", &at],
+    ] {
+        let held = gamectl(&command);
+        assert_eq!(held.code, Exit::Input, "{command:?}");
+        assert!(
+            held.err.contains("another command holds this match"),
+            "{}",
+            held.err
+        );
+    }
+    let mut output: Vec<u8> = Vec::new();
+    let served = external::serve(&root(), &dir, &b"{}\n"[..], &mut output);
+    assert_eq!(
+        served.expect_err("the bridge is refused too").code,
+        Exit::Input
+    );
+    assert!(output.is_empty(), "a refused bridge answered a line");
+    assert!(
+        lock.exists(),
+        "a refused command removed a lock it did not make"
+    );
+    assert_eq!(std::fs::read(&save).expect("the save"), before);
+
+    // Removed by hand, the match goes on; and a command that is refused by
+    // the gateway after it took the lock still gives it back.
+    std::fs::remove_file(&lock).expect("the lock is removed");
+    let status = gamectl(&["match", "call", "get_status", "--dir", &at]);
+    assert_eq!(status.code, Exit::Ok, "{}", status.err);
+    assert!(!lock.exists());
+    let refused = gamectl(&["match", "call", "end_lull", "--dir", &at]);
+    assert_eq!(refused.code, Exit::Failed);
+    assert!(!lock.exists());
+}
+
+#[test]
 fn a_folder_with_no_match_and_a_command_line_that_asks_for_nothing_are_refused() {
     let dir = fresh_dir("refusals");
     let at = dir_arg(&dir);

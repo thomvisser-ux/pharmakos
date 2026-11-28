@@ -39,6 +39,14 @@
 //! program that reads the folder has read what its seat is not told; results
 //! from such a run are development evidence and never proof.
 //!
+//! **One command at a time.** A command that takes a match up makes
+//! [`LOCK_FILE`] in its folder and removes it as it puts the match down, and
+//! a command that finds the file there is refused: two processes over one
+//! save would each write what the other had not read. A process that is
+//! killed leaves the file behind; the refusal names it, and removing it by
+//! hand is safe once no `gamectl` is running on the folder (the saves are
+//! written whole, at boundaries, so what is on disk is a match to take up).
+//!
 //! # The commands
 //!
 //! * `new` starts the match and prints where it stands (`get_status`).
@@ -97,6 +105,10 @@ use crate::{host, strings};
 /// with: seven tab-separated fields as the gateway writes them
 /// (`pharmakos_gateway::serve::ConfigLine`), and no token.
 pub const LINE_FILE: &str = "external.line";
+
+/// The file that says a command holds the match: made as a match is taken
+/// up, removed as it is put down. It holds nothing.
+pub const LOCK_FILE: &str = "external.lock";
 
 /// The file in an ended match's folder that holds the seat's last recap: the
 /// whole JSON-RPC response to the `get_recap` the ending process made.
@@ -314,6 +326,46 @@ fn without_carriage_return(mut line: Vec<u8>) -> Vec<u8> {
     line
 }
 
+/// The lock on a match's folder, held for as long as this value lives.
+struct Held {
+    path: std::path::PathBuf,
+}
+
+impl Held {
+    /// Make the lock file, or refuse because it is there.
+    fn take(dir: &Path) -> Result<Held, Failure> {
+        let path = dir.join(LOCK_FILE);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(_) => Ok(Held { path }),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(Failure::input(
+                strings::match_in_use(&crate::display(&path)),
+            )),
+            Err(error) => Err(Failure::input(strings::match_folder(
+                &crate::display(dir),
+                &error.to_string(),
+            ))),
+        }
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        // A lock that will not go is said, on the one stream a drop has: the
+        // next command would otherwise be refused with no reason on record.
+        if let Err(error) = std::fs::remove_file(&self.path) {
+            let _unsaid = writeln!(
+                std::io::stderr(),
+                "{}",
+                strings::match_lock_left(&crate::display(&self.path), &error.to_string())
+            );
+        }
+    }
+}
+
 /// One process's hold on a match: taken up from its folder, and put down
 /// again.
 struct Session {
@@ -321,6 +373,9 @@ struct Session {
     /// The match's folder.
     dir: std::path::PathBuf,
     unsaid: std::sync::Arc<host::Unsaid>,
+    /// The folder's lock. Fields drop in the order they are declared, so the
+    /// match (above) is gone before the lock is.
+    _held: Held,
     /// The id of the next call this process makes for the caller.
     next_id: u64,
 }
@@ -339,6 +394,7 @@ impl Session {
                 &error.to_string(),
             ))
         })?;
+        let held = Held::take(dir)?;
         // The line first, and never over one that is there: a folder with a
         // line is a match, and a second `new` racing this one loses here.
         let mut file = std::fs::OpenOptions::new()
@@ -367,6 +423,7 @@ impl Session {
                 external,
                 dir: dir.to_path_buf(),
                 unsaid,
+                _held: held,
                 next_id: 1,
             }),
             Err(failure) => {
@@ -418,12 +475,14 @@ impl Session {
         })?;
         line.resume = true;
         let (setup, unsaid) = host::setup(root)?;
+        let held = Held::take(dir)?;
         let external =
             External::open(setup, dir, &line).map_err(|error| refused(&error, &unsaid))?;
         Ok(Session {
             external,
             dir: dir.to_path_buf(),
             unsaid,
+            _held: held,
             next_id: 1,
         })
     }
@@ -458,9 +517,15 @@ impl Session {
     /// Put the match down, and say what Easy's seats could not.
     fn put_down(self) -> Result<(), Failure> {
         let Session {
-            external, unsaid, ..
+            external,
+            unsaid,
+            _held: held,
+            ..
         } = self;
-        external.close().map_err(|error| stopped(&error, &unsaid))?;
+        let closed = external.close().map_err(|error| stopped(&error, &unsaid));
+        // The match is down, as far as it could be: the lock goes now.
+        drop(held);
+        closed?;
         host::say_unsaid_at_close(&mut std::io::stderr(), &unsaid);
         Ok(())
     }
