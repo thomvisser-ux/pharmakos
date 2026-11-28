@@ -142,9 +142,10 @@ pub fn unknown_command(given: &str) -> String {
     let given = pharmakos_proto::json::grammar::quoted(given);
     if connect {
         return format!(
-            "{BINARY}: there is no `connect`, and there will not be one in v1. Nothing outside \
-             the game attaches to a seat (AGENTS.md §11); the Seat Gateway is internal and the \
-             published API is v1.1."
+            "{BINARY}: there is no `connect`, and there will not be one in v1. Nothing attaches \
+             to a seat over a socket (AGENTS.md §11); the Seat Gateway is internal and the \
+             published API is v1.1. A local program plays a seat only through the experimental \
+             `{BINARY} match` commands."
         );
     }
     format!("{BINARY}: `{given}` is not a command. `{BINARY} --help` lists them.")
@@ -468,6 +469,24 @@ pub fn match_line_left(failure: &str, path: &str, why: &str) -> String {
     )
 }
 
+/// A config line in a match's folder that `match new` did not write: another
+/// match id, or another preset.
+#[must_use]
+pub fn match_line_foreign(path: &str, id: &str) -> String {
+    let path = pharmakos_proto::json::grammar::escaped(path);
+    format!(
+        "{BINARY} match: `{path}` is not a line `{BINARY} match new` wrote: these commands take \
+         up only the match they started, `{id}` under the `custom` preset, and no other match \
+         a folder holds."
+    )
+}
+
+/// Why a file was not read: it is longer than what it is read to.
+#[must_use]
+pub fn too_long(cap: usize) -> String {
+    format!("it is longer than {cap} bytes")
+}
+
 /// A value `match new` cannot put on a config line at all.
 #[must_use]
 pub fn match_bad_value(flag: &str, given: &str) -> String {
@@ -498,6 +517,13 @@ pub fn match_in_use(lock: &str) -> String {
     )
 }
 
+/// A lock file that could not be made, for a reason other than being there.
+#[must_use]
+pub fn match_lock_unmade(lock: &str, why: &str) -> String {
+    let lock = pharmakos_proto::json::grammar::escaped(lock);
+    format!("{BINARY} match: the match's lock `{lock}` could not be made: {why}")
+}
+
 /// A lock file that could not be removed as its command ended.
 #[must_use]
 pub fn match_lock_left(lock: &str, why: &str) -> String {
@@ -518,6 +544,34 @@ pub fn match_ended(result: &str) -> String {
     )
 }
 
+/// A `match` command in a folder whose match has ended and whose recap file
+/// is not there.
+#[must_use]
+pub fn match_ended_unkept(result: &str) -> String {
+    let result = pharmakos_proto::json::grammar::escaped(result);
+    format!(
+        "{BINARY} match: this match has ended, and an ended match is not taken up again. The \
+         seat's last recap was not kept (`{result}` is not there): the process that played the \
+         last Push stopped before it wrote it. The match's sealed playbooks and chains are in \
+         its folder."
+    )
+}
+
+/// The heading `match brief` prints above an ended match's recap: the text
+/// under it was read from a file in the folder, not answered by the gateway
+/// now, and the heading says so.
+#[must_use]
+pub fn match_brief_kept(result: &str) -> String {
+    let result = pharmakos_proto::json::grammar::escaped(result);
+    format!("== get_recap, as kept in `{result}` when the match ended ==")
+}
+
+/// The gateway refused the seat's last `get_recap`, so there is none to keep.
+#[must_use]
+pub fn match_recap_refused(message: &str) -> String {
+    format!("the gateway refused the seat's last `get_recap`: {message}")
+}
+
 /// The match ended and the seat's last recap could not be kept.
 #[must_use]
 pub fn match_result_unwritten(path: &str, why: &str) -> String {
@@ -531,7 +585,25 @@ pub fn match_result_unwritten(path: &str, why: &str) -> String {
 /// `match serve`'s own pipe failed.
 #[must_use]
 pub fn match_pipe(what: &str, error: &std::io::Error) -> String {
-    format!("{BINARY} match serve: {what} failed ({error}); the match was put down first.")
+    format!("{BINARY} match serve: {what} failed ({error}), and the bridge ended there.")
+}
+
+/// `match serve` ended because the host closed its door on the program.
+#[must_use]
+pub fn match_door_closed(refusals: u32) -> String {
+    format!(
+        "{BINARY} match serve: the bridge ended: {refusals} lines in a row were refused (lines \
+         that are not requests, and calls past this process's call budget), so nothing more is \
+         read. The match was put down; a new `{BINARY} match` command, or a new bridge, goes on \
+         with its own budget."
+    )
+}
+
+/// Two failures of one command, both said: what ended it, and what putting
+/// the match down then met.
+#[must_use]
+pub fn match_and(first: &str, second: &str) -> String {
+    format!("{first} And as the match was put down: {second}")
 }
 
 /// The line `match brief` prints above one read's answer.

@@ -20,7 +20,7 @@
 
 mod support;
 
-use pharmakos_gateway::limit::EXTERNAL_LIMITS;
+use pharmakos_gateway::limit::{EXTERNAL_LIMITS, EXTERNAL_REFUSALS_IN_A_ROW};
 use pharmakos_gateway::probation::Preset;
 use pharmakos_gateway::rpc;
 use pharmakos_gateway::serve::{Config, ConfigLine, External, NoOperators, Setup};
@@ -338,6 +338,120 @@ fn a_lull_has_the_call_budget_the_limits_name() {
     }
     let over = ask(&mut external, "get_status", no_params());
     assert_eq!(refusal(&over, "the call past the budget"), "RATE_LIMITED");
+    external.close().expect("the match is put down");
+}
+
+/// The door closes on a program stuck in a loop (item 231 (11), reviews 1 and
+/// 2): a message that was never a request never reaches the limiter and a
+/// rate-limited call still leaves its line, so the host itself stops reading
+/// after [`EXTERNAL_REFUSALS_IN_A_ROW`] of them in a row. What arrives after
+/// that is counted in one line, never one line each; and the next process has
+/// an open door.
+#[test]
+fn the_door_closes_after_refusals_in_a_row_and_the_log_stops_growing() {
+    let root = data_root("external-door");
+    let id = "m-external-door";
+    let mut external = open(&root, id, false);
+    let cap = EXTERNAL_REFUSALS_IN_A_ROW;
+
+    // One short of the cap, then a call the limiter admits: the count starts
+    // again, and the door stays open.
+    for _ in 1..cap {
+        let answer = external.call("not json");
+        assert_eq!(answer.get("id"), Some(&Json::Null));
+    }
+    assert!(!external.door_closed());
+    assert!(
+        ask(&mut external, "get_status", no_params())
+            .get("result")
+            .is_some()
+    );
+
+    // The cap, in a row, of every kind that is counted: the door closes on
+    // the last, which is still answered as what it was.
+    for refusal in 0..cap {
+        assert!(!external.door_closed(), "closed early, at {refusal}");
+        let answer = if refusal % 2 == 0 {
+            external.call("not json")
+        } else {
+            external.call_bytes(b"\xff")
+        };
+        assert!(answer.get("error").is_some());
+    }
+    assert!(external.door_closed());
+
+    // After it: answered in the door's own words under the caller's id,
+    // unread (an admitted call would have been answered), and with no line
+    // of its own.
+    let flood = 500_u32;
+    for _ in 0..flood {
+        let answer = ask(&mut external, "get_status", no_params());
+        assert_eq!(refusal(&answer, "a call at a closed door"), "RATE_LIMITED");
+        let message = match answer.get("error").and_then(|error| error.get("message")) {
+            Some(Json::String(message)) => message.clone(),
+            other => panic!("no message: {other:?}"),
+        };
+        assert!(message.contains("door is closed"), "{message}");
+    }
+    external.close().expect("the match is put down");
+
+    let log = audit_log(&root, id);
+    let lines = |needle: &str| log.lines().filter(|line| line.contains(needle)).count();
+    assert_eq!(lines("external seat door closed"), 1, "{log}");
+    assert_eq!(
+        lines(&format!("external seat unanswered: {flood}")),
+        1,
+        "{log}"
+    );
+    let unread = lines("call <malformed>") + lines("call <not utf-8>");
+    assert_eq!(
+        u32::try_from(unread).expect("a small count"),
+        cap.saturating_sub(1).saturating_add(cap),
+        "one line a message that was read, and none after the door closed"
+    );
+    // A message that was never a request is audited under the outside seat's
+    // handle, like every other line of its.
+    let handle = log
+        .lines()
+        .find(|line| line.split('\t').nth(4) == Some("external seat"))
+        .and_then(|line| line.split('\t').nth(3).map(str::to_owned))
+        .expect("the line that names the outside seat's handle");
+    assert_ne!(handle, "-");
+    for line in log.lines().filter(|line| line.contains("call <malformed>")) {
+        assert_eq!(line.split('\t').nth(3), Some(handle.as_str()), "{line}");
+    }
+
+    // The budget and the door are this process's: the next one is served.
+    let mut next = open(&root, id, true);
+    assert!(!next.door_closed());
+    assert!(
+        ask(&mut next, "get_status", no_params())
+            .get("result")
+            .is_some()
+    );
+    next.close().expect("put down again");
+}
+
+/// A call past the budget is a refusal the door counts, so a bridge that has
+/// spent its Lull's budget is closed after the cap more, not left answering
+/// `RATE_LIMITED` (and writing a line) for as long as it is fed.
+#[test]
+fn a_spent_budget_closes_the_door_after_the_cap_more() {
+    let root = data_root("external-spent");
+    let mut external = open(&root, "m-external-spent", false);
+    for _ in 0..EXTERNAL_LIMITS.per_tick {
+        assert!(
+            ask(&mut external, "get_status", no_params())
+                .get("result")
+                .is_some()
+        );
+    }
+    for _ in 0..EXTERNAL_REFUSALS_IN_A_ROW {
+        assert!(!external.door_closed());
+        let over = ask(&mut external, "set_ready", no_params());
+        assert_eq!(refusal(&over, "a call past the budget"), "RATE_LIMITED");
+    }
+    assert!(external.door_closed());
     external.close().expect("the match is put down");
 }
 

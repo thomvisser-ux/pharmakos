@@ -158,7 +158,12 @@
 //! * **The seat's rate is its own**, [`crate::limit::EXTERNAL_LIMITS`], for
 //!   the reason an in-process seat's is: a headless Lull has no timer and
 //!   reports no clock, so every call of a Lull lands on one tick. It is a
-//!   rate and never a read.
+//!   rate and never a read, and it is counted in this process: a new process
+//!   has a new count. What the limiter does not bound (a message that was
+//!   never a request, and the refusals past the budget, each a line in the
+//!   audit log) the host bounds itself: after
+//!   [`crate::limit::EXTERNAL_REFUSALS_IN_A_ROW`] of them in a row its door
+//!   closes for the process ([`External::door_closed`]).
 //! * **A Lull lasts until the seat says it may end.** No clock is read or
 //!   reported, so nothing here depends on how fast the machine or the program
 //!   is, and the Lull's length is not an input to anything hashed. The Push
@@ -1611,10 +1616,22 @@ pub struct External {
     in_process: InProcessSeats,
     /// The seat's own token: minted here, used here, never rendered.
     token: Token,
+    /// The token's handle, which every audit line of the outside seat's
+    /// carries, the ones for a message that was never a request included.
+    handle: Handle,
     seat: SeatId,
     /// The write this host stopped on, once it has: every later call is
     /// answered with it, as a socket host's connections are.
     stopped: Option<Error>,
+    /// Refusals answered in a row, of the kinds a program stuck in a loop
+    /// makes ([`crate::limit::EXTERNAL_REFUSALS_IN_A_ROW`]).
+    refused_in_a_row: u32,
+    /// The door closed on that count: no later message of this process is
+    /// read, and none leaves a line of its own.
+    door_closed: bool,
+    /// Messages that arrived after the door closed: counted here, and said
+    /// in one audit line as the host puts the match down.
+    unanswered: u64,
 }
 
 impl std::fmt::Debug for External {
@@ -1704,8 +1721,12 @@ impl External {
             },
             in_process,
             token,
+            handle,
             seat,
             stopped: None,
+            refused_in_a_row: 0,
+            door_closed: false,
+            unanswered: 0,
         };
         external.advance()?;
         Ok(external)
@@ -1737,23 +1758,39 @@ impl External {
     /// frames a stream may hand over only the first bytes of one, so long as
     /// they pass the cap), and a message that is not UTF-8, which is never
     /// repaired into text that might then parse.
+    ///
+    /// **The door closes on a program stuck in a loop.** A message that was
+    /// never a request does not reach the rate limiter, and a call the limiter
+    /// refuses still leaves its line, so neither is bounded by the call
+    /// budget. After [`crate::limit::EXTERNAL_REFUSALS_IN_A_ROW`] such
+    /// refusals in a row the door closes for the rest of this process
+    /// ([`External::door_closed`]): the closing is one audit line, every
+    /// later message is answered `RATE_LIMITED` in words that say so, unread
+    /// and with no line of its own, and their count is one line as the match
+    /// is put down. A headless Lull's tick stands still, so a spent budget
+    /// stays spent for the process; the next process has its own.
     pub fn call_bytes(&mut self, bytes: &[u8]) -> Json {
         if let Some(error) = &self.stopped {
-            let id = match std::str::from_utf8(bytes).map(rpc::parse) {
-                Ok(Ok(request)) => request.id,
-                Ok(Err(_)) | Err(_) => Json::Null,
-            };
-            return rpc::failure(&id, error);
+            return rpc::failure(&id_of(bytes), error);
         }
-        let (id, response) = if crate::frame::message_fits(bytes.len()) {
+        if self.door_closed {
+            self.unanswered = self.unanswered.saturating_add(1);
+            return rpc::failure(&id_of(bytes), &door_closed_error());
+        }
+        let (id, response, admitted) = if crate::frame::message_fits(bytes.len()) {
             match std::str::from_utf8(bytes) {
                 Ok(text) => match rpc::parse(text) {
                     Ok(request) => {
                         let vision = vision_of(&self.surface);
                         let response = self.surface.call(Some(&self.token), &request, &vision);
-                        (request.id, response)
+                        let admitted = !is_rate_limited(&response);
+                        (request.id, response, admitted)
                     }
-                    Err(malformed) => (Json::Null, self.unread("call <malformed>", &malformed)),
+                    Err(malformed) => (
+                        Json::Null,
+                        self.unread("call <malformed>", &malformed),
+                        false,
+                    ),
                 },
                 Err(_) => (
                     Json::Null,
@@ -1761,6 +1798,7 @@ impl External {
                         "call <not utf-8>",
                         &rpc::Malformed::Parse(String::from("a request is UTF-8 text")),
                     ),
+                    false,
                 ),
             }
         } else {
@@ -1773,8 +1811,25 @@ impl External {
                         crate::frame::MAX_MESSAGE_BYTES
                     )),
                 ),
+                false,
             )
         };
+        if admitted {
+            self.refused_in_a_row = 0;
+        } else {
+            self.refused_in_a_row = self.refused_in_a_row.saturating_add(1);
+            if self.refused_in_a_row >= crate::limit::EXTERNAL_REFUSALS_IN_A_ROW {
+                self.door_closed = true;
+                let tick = self.surface.time().tick;
+                self.surface.audit().refused(
+                    tick,
+                    Some(Subject::Seat(self.seat)),
+                    Some(self.handle),
+                    "external seat door closed",
+                    &door_closed_error(),
+                );
+            }
+        }
         match self.writer.flush(&mut self.surface) {
             Ok(()) => response,
             Err(error) => rpc::failure(&id, &self.stop(error)),
@@ -1782,24 +1837,53 @@ impl External {
     }
 
     /// The answer to a message that was never a request, and its line in the
-    /// audit log: `action` is one of this function's callers' fixed literals,
-    /// never a byte the caller sent.
+    /// audit log, under the outside seat's handle: `action` is one of this
+    /// function's callers' fixed literals, never a byte the caller sent.
     fn unread(&mut self, action: &'static str, malformed: &rpc::Malformed) -> Json {
         let tick = self.surface.time().tick;
         self.surface.audit().refused(
             tick,
             Some(Subject::Seat(self.seat)),
-            None,
+            Some(self.handle),
             action,
             &Error::invalid(said!("a message that is not a request")),
         );
         rpc::malformed_response(malformed)
     }
 
+    /// Whether this process's door has closed on the outside seat
+    /// ([`External::call_bytes`]). A caller that feeds a stream stops feeding
+    /// it: nothing more is read in this process, and the match is put down
+    /// and taken up again to go on.
+    #[must_use]
+    pub fn door_closed(&self) -> bool {
+        self.door_closed
+    }
+
+    /// The line that says how many messages arrived after the door closed,
+    /// written once, as the match is put down or the host stops.
+    fn say_unanswered(&mut self) {
+        if self.unanswered == 0 {
+            return;
+        }
+        let count = std::mem::take(&mut self.unanswered);
+        let tick = self.surface.time().tick;
+        self.surface.audit().record(
+            tick,
+            Some(Subject::Seat(self.seat)),
+            Some(self.handle),
+            format!("external seat unanswered: {count}"),
+            crate::audit::Outcome::Ok,
+        );
+    }
+
     /// Bring the match to where the outside seat acts next.
     ///
     /// In a Lull the seat has not called ready in, nothing moves: the
-    /// built-in seats plan it, once, and that is all. Once the seat is ready
+    /// built-in seats plan it, once a process (a Lull taken up again by a new
+    /// process is planned again there, to the same playbooks: the operator
+    /// is a function of the match, the seat and the round), and that is all.
+    /// Once the seat is ready
     /// the host seals every seat's orders, plays the Push to its segment's
     /// end, closes the recap and opens the next Lull, which the built-in
     /// seats plan; or the match ends. A Push or a recap a resume landed in is
@@ -1859,6 +1943,7 @@ impl External {
     /// Stop on `error`: write the audit log's last lines and keep the error
     /// for every later call.
     fn stop(&mut self, error: Error) -> Error {
+        self.say_unanswered();
         let error = self.writer.last_lines(&mut self.surface, error);
         self.stopped = Some(error.clone());
         error
@@ -1875,6 +1960,7 @@ impl External {
         if let Some(error) = self.stopped.take() {
             return Err(error);
         }
+        self.say_unanswered();
         match self.writer.close(&mut self.surface) {
             Ok(()) => Ok(()),
             Err(error) => Err(self.writer.last_lines(&mut self.surface, error)),
@@ -1888,6 +1974,35 @@ impl External {
     pub fn ended(&self) -> bool {
         self.surface.time().phase == pharmakos_proto::gp::api::v1::status::Phase::Ended
     }
+}
+
+/// The id a message carries, when it is a request; null when it is not one,
+/// as JSON-RPC asks of an answer to a message that could not be read.
+fn id_of(bytes: &[u8]) -> Json {
+    match std::str::from_utf8(bytes).map(rpc::parse) {
+        Ok(Ok(request)) => request.id,
+        Ok(Err(_)) | Err(_) => Json::Null,
+    }
+}
+
+/// Whether `response` is the rate limiter's refusal: read from the error's
+/// own name, the one place a response says which of the closed set it is.
+fn is_rate_limited(response: &Json) -> bool {
+    let name = response
+        .get("error")
+        .and_then(|error| error.get("data"))
+        .and_then(|data| data.get("code"));
+    matches!(name, Some(Json::String(name)) if name == Error::rate_limited("").name())
+}
+
+/// What a closed door answers ([`External::door_closed`]).
+fn door_closed_error() -> Error {
+    Error::rate_limited(said!(
+        "the outside seat's door is closed for this process after {} refusals in a row (messages \
+         that are not requests, and calls past the call budget); put the match down and take it \
+         up again",
+        crate::limit::EXTERNAL_REFUSALS_IN_A_ROW
+    ))
 }
 
 /// Accept connections, bounded by [`MAX_CONNECTIONS`], one reader thread each.

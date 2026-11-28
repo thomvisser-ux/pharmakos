@@ -65,7 +65,8 @@
 //!    It is no handler, so what holds it is who may call it:
 //!    [`the_headless_driver_is_the_external_hosts_alone`] keeps its three
 //!    functions to `src/serve.rs`, once each, so the stepping list cannot be
-//!    walked round by a name it does not know.
+//!    walked round by a name it does not know, and holds the driver to a
+//!    list of powers it may not grow into (a token, a clock, a save seam).
 //!
 //! 7. **No wire method files a voxel edit or a damage order.**
 //!    [`no_wire_method_files_a_voxel_edit_or_a_damage_order`]. `Host` gained
@@ -377,6 +378,43 @@ const HEADLESS_CROSSINGS: &[(&str, &str)] = &[
 /// The one file that may call [`HEADLESS_CROSSINGS`]: the host loop, where
 /// the external seat's host lives.
 const HEADLESS_CALLER: &str = "src/serve.rs";
+
+/// What [`HEADLESS_MODULE`] may never name, beyond [`CONTROL_BANNED`]: the
+/// powers a host has and a driver of three crossings does not need. The
+/// stepping list and the control handlers' bans are about reaching inside the
+/// match; these are about what a module that moves a match with no admin
+/// token could otherwise grow into.
+const HEADLESS_BANNED: &[(&str, &str)] = &[
+    (
+        "tokens",
+        "the driver holds no token and mints none: the external seat's host mints one seat's \
+         token, in the host loop, and no token that could move a match exists on this path",
+    ),
+    (".mint(", "the same rule, by the call"),
+    (
+        "set_phase_remaining_ms",
+        "a headless Lull is untimed: the driver gives the gateway no clock",
+    ),
+    (
+        "report_host_clock",
+        "a headless Lull is untimed: the driver reports no clock",
+    ),
+    (
+        "register_in_process",
+        "giving a token a rate is the host loop's (rule 8)",
+    ),
+    ("file_advice", "filing advice is the host loop's (rule 8)"),
+    (
+        "seal_by_harness",
+        "the scenario harness's door is the scenario runner's alone",
+    ),
+    (
+        "lull_save",
+        "the save seams are the host loop's: the driver crosses a boundary and the host loop \
+         writes it",
+    ),
+    ("take_persistence", "the save seams are the host loop's"),
+];
 
 /// What [`CONTROL_MODULE`] and [`HEADLESS_MODULE`] may never name.
 ///
@@ -1805,6 +1843,33 @@ fn the_headless_driver_is_the_external_hosts_alone() {
         uses_in("src/serve.rs", "seat_is_ready"),
         0,
         "the host loop leaves the ready question to the driver, which cannot be skipped"
+    );
+
+    // Powers, as well as names: what the driver may not grow into.
+    let mut beyond: Vec<String> = Vec::new();
+    for (number, line) in &lines {
+        for (needle, why) in HEADLESS_BANNED {
+            if uses(line, needle) {
+                beyond.push(format!(
+                    "{HEADLESS_MODULE}:{number}: `{needle}` -- {why}\n    {}",
+                    line.trim()
+                ));
+            }
+        }
+    }
+    assert!(
+        beyond.is_empty(),
+        "the headless driver reaches for a host's power:\n{}",
+        beyond.join("\n")
+    );
+    let lulls: Vec<&(usize, String)> = lines
+        .iter()
+        .filter(|(_, line)| uses(line, "open_lull"))
+        .collect();
+    assert_eq!(
+        lulls.len(),
+        1,
+        "the driver opens a Lull in one place, as it leaves a recap: {lulls:?}"
     );
 }
 

@@ -112,8 +112,12 @@ deny = [
     { crate = "wasmi", reason = "spec §15: no script engine or script runtime in v1" },
     # AGENTS.md section 7, with the external seat (decisions-log item 231): the
     # game never starts, calls or pays for an AI and sends no telemetry, so no
-    # crate in the graph is an HTTP or TLS client. `Cargo.lock` is held to the
-    # same list by `crates/gamectl/tests/external.rs`.
+    # crate in the graph is an HTTP, TLS or WebSocket client, and none is an
+    # async runtime or a socket library (the gateway's one listener is
+    # `std::net`). A list of names is a tripwire and not a proof: it catches
+    # the crates a network client would arrive as, by their real names, which
+    # `Cargo.lock` records whatever a manifest renames them to. `Cargo.lock` is
+    # held to the same list by `crates/gamectl/tests/external.rs`.
     { crate = "reqwest", reason = "AGENTS.md section 7: no HTTP client in any crate" },
     { crate = "ureq", reason = "AGENTS.md section 7: no HTTP client in any crate" },
     { crate = "hyper", reason = "AGENTS.md section 7: no HTTP client in any crate" },
@@ -125,6 +129,18 @@ deny = [
     { crate = "rustls", reason = "AGENTS.md section 7: no TLS client in any crate" },
     { crate = "native-tls", reason = "AGENTS.md section 7: no TLS client in any crate" },
     { crate = "openssl", reason = "AGENTS.md section 7: no TLS client in any crate" },
+    { crate = "tokio-rustls", reason = "AGENTS.md section 7: no TLS client in any crate" },
+    { crate = "tokio-native-tls", reason = "AGENTS.md section 7: no TLS client in any crate" },
+    { crate = "h2", reason = "AGENTS.md section 7: no HTTP client in any crate" },
+    { crate = "hyper-util", reason = "AGENTS.md section 7: no HTTP client in any crate" },
+    { crate = "tungstenite", reason = "AGENTS.md section 7: no WebSocket client in any crate" },
+    { crate = "tokio-tungstenite", reason = "AGENTS.md section 7: no WebSocket client in any crate" },
+    { crate = "quinn", reason = "AGENTS.md section 7: no network client in any crate" },
+    { crate = "tokio", reason = "AGENTS.md section 7: no async runtime; the gateway's listener is std::net" },
+    { crate = "async-std", reason = "AGENTS.md section 7: no async runtime; the gateway's listener is std::net" },
+    { crate = "smol", reason = "AGENTS.md section 7: no async runtime; the gateway's listener is std::net" },
+    { crate = "mio", reason = "AGENTS.md section 7: no socket library; the gateway's listener is std::net" },
+    { crate = "socket2", reason = "AGENTS.md section 7: no socket library; the gateway's listener is std::net" },
 ]
 
 skip = [

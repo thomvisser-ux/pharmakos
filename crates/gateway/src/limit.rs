@@ -99,18 +99,27 @@ pub const IN_PROCESS_LIMITS: Limits = Limits {
 /// A headless match has no Lull timer and reports no host clock, so the
 /// gateway's tick stands still for the whole of a Lull and every call the
 /// program makes in it lands on one tick. A socket's [`CALLS_PER_TICK`] would
-/// refuse its ninth. These numbers are therefore **a Lull's budget**: at most
-/// this many calls between one Push and the next, counted, audited and
-/// fog-filtered like any other, and refused as `RATE_LIMITED` past it. Like
-/// [`IN_PROCESS_LIMITS`] it is a rate and never a read: the seat sees what a
-/// socket holding the same scopes sees.
+/// refuse its ninth. These numbers are therefore **a Lull's budget for one
+/// process**: at most this many calls between one Push and the next by one
+/// host process, counted, audited and fog-filtered like any other, and
+/// refused as `RATE_LIMITED` past it. Like [`IN_PROCESS_LIMITS`] it is a rate
+/// and never a read: the seat sees what a socket holding the same scopes
+/// sees.
 ///
 /// What the cap is for: every call is one line in the audit log on the
-/// player's disk, so a program stuck in a loop is stopped at a bounded cost
-/// rather than left to fill it. What it does not do, said plainly: the count
-/// lives in the host's process, and `gamectl match call` is one process a
-/// call, so the turn-by-turn commands are bounded by the cost of starting a
-/// process and not by this number; the bridge (`gamectl match serve`) is.
+/// player's disk, so a program stuck in a loop is stopped. A refusal is a
+/// line too, and a message that was never a request never reaches this
+/// limiter, so the cap alone does not bound the log: the host closes its door
+/// after [`EXTERNAL_REFUSALS_IN_A_ROW`] refusals in a row, and what arrives
+/// after that is counted and not written. One process therefore writes at
+/// most a bounded number of lines a Lull.
+///
+/// What it does not do, said plainly: **the count lives in the host's
+/// process**. A new process starts a new count, so `gamectl match call`, one
+/// process a call, is bounded by the cost of starting a process and not by
+/// this number, and a bridge (`gamectl match serve`) that is started again
+/// has its budget again. A budget that holds across processes would be a
+/// count in the save, a contract format; it is not built.
 ///
 /// PLACEHOLDER: an external seat's 1 200 calls a Lull — owner, at hardening, with the rate limits.
 pub const EXTERNAL_LIMITS: Limits = Limits {
@@ -118,6 +127,20 @@ pub const EXTERNAL_LIMITS: Limits = Limits {
     per_window: 1_200,
     window_ticks: WINDOW_TICKS,
 };
+
+/// How many refusals in a row the external seat's host answers before it
+/// closes its door for the rest of the process
+/// ([`crate::serve::External::door_closed`]).
+///
+/// The refusals counted are the ones a program stuck in a loop makes: a
+/// message that was never a request (not JSON, not a request, too long, not
+/// UTF-8) and a call refused as `RATE_LIMITED`. Any call the limiter admits
+/// starts the count again. A refusal of another kind (a scope, a phase, a
+/// playbook the verifier refuses) is an answer a working program gets, was
+/// admitted, and is counted against [`EXTERNAL_LIMITS`] like any call.
+///
+/// PLACEHOLDER: an external seat's 64 refusals in a row before its door closes — owner, at hardening, with the rate limits.
+pub const EXTERNAL_REFUSALS_IN_A_ROW: u32 = 64;
 
 /// The two caps, so a test or a host can set them without touching the
 /// constants.

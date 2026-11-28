@@ -336,10 +336,13 @@ pub fn write(value: &Json) -> String {
 /// stream that frames a message as a line (the external seat's bridge,
 /// `gamectl match serve`; decisions-log item 231).
 ///
-/// The same lexemes and the same string escapes as [`write`], so [`read`]
-/// reads it back to the same value; only the layout differs. Every C0 control
-/// character inside a string is written escaped, a line feed among them, so
-/// the text holds no line break whatever the value holds.
+/// The same lexemes as [`write`], so [`read`] reads it back to the same
+/// value; the layout differs, and so does one thing about strings: beside the
+/// characters [`write`] escapes (the C0 controls, a line feed among them),
+/// this writes escaped every other character a line reader may split on:
+/// DEL, the C1 controls (U+0085 among them), U+2028 and U+2029. The text
+/// therefore holds no line break by any reader's rule, whatever the value
+/// holds.
 #[must_use]
 pub fn write_line(value: &Json) -> String {
     let mut out = String::new();
@@ -353,7 +356,7 @@ fn write_value_on_a_line(value: &Json, out: &mut String) {
         Json::Bool(true) => out.push_str("true"),
         Json::Bool(false) => out.push_str("false"),
         Json::Number(lexeme) => out.push_str(lexeme),
-        Json::String(text) => write_string(text, out),
+        Json::String(text) => write_string_escaping(text, needs_escape_on_a_line, out),
         Json::Array(items) => {
             out.push('[');
             for (index, item) in items.iter().enumerate() {
@@ -370,7 +373,7 @@ fn write_value_on_a_line(value: &Json, out: &mut String) {
                 if index > 0 {
                     out.push(',');
                 }
-                write_string(key, out);
+                write_string_escaping(key, needs_escape_on_a_line, out);
                 out.push(':');
                 write_value_on_a_line(item, out);
             }
@@ -436,13 +439,21 @@ fn write_value(value: &Json, depth: usize, out: &mut String) {
 /// A string as canonical JSON: quoted, with `"`, `\` and the control
 /// characters escaped and everything else as it is.
 pub(crate) fn write_string(text: &str, out: &mut String) {
+    write_string_escaping(text, needs_escape, out);
+}
+
+/// [`write_string`], escaping what `needs` says: the canonical writer's set,
+/// or the one-line writer's wider one. A character with no short escape is
+/// written `\uXXXX`; every character either set names is below U+10000, so
+/// four digits hold it.
+fn write_string_escaping(text: &str, needs: fn(char) -> bool, out: &mut String) {
     out.push('"');
     // The text between two characters that need an escape is copied in one
     // piece; each piece ends with the character that ends it, if any.
-    for piece in text.split_inclusive(needs_escape) {
+    for piece in text.split_inclusive(needs) {
         let mut characters = piece.chars();
         match characters.next_back() {
-            Some(last) if needs_escape(last) => {
+            Some(last) if needs(last) => {
                 out.push_str(characters.as_str());
                 match last {
                     '"' => out.push_str("\\\""),
@@ -466,6 +477,17 @@ pub(crate) fn write_string(text: &str, out: &mut String) {
 /// Whether a character is written escaped: `"`, `\` and the C0 controls.
 const fn needs_escape(character: char) -> bool {
     matches!(character, '"' | '\\' | '\u{0}'..='\u{1f}')
+}
+
+/// Whether the one-line writer writes a character escaped: the canonical
+/// set, and every other character some line reader splits a text on. Those
+/// are DEL and the C1 controls (U+0085, next line, among them) and the two
+/// Unicode separators, U+2028 and U+2029: JSON allows each raw inside a
+/// string, and a reader that splits on any of them (Python's
+/// `str.splitlines` splits on all three named) would cut one answer into
+/// pieces that are not JSON.
+const fn needs_escape_on_a_line(character: char) -> bool {
+    needs_escape(character) || matches!(character, '\u{7f}'..='\u{9f}' | '\u{2028}' | '\u{2029}')
 }
 
 #[cfg(test)]
@@ -499,6 +521,42 @@ mod tests {
             super::write_line(&read("{\"k\": [1, \"v\"]}").expect("a value")),
             "{\"k\":[1,\"v\"]}"
         );
+    }
+
+    /// No character a line reader splits on reaches the one-line form raw, in
+    /// a string or in a key: DEL, the C1 controls (U+0085, next line, among
+    /// them) and the two Unicode separators are written escaped, and the line
+    /// still reads back to the same value. The canonical writer is unchanged:
+    /// it writes them raw, as it always has.
+    #[test]
+    fn the_one_line_form_escapes_every_character_a_line_reader_splits_on() {
+        let splitters = [
+            '\u{7f}', '\u{80}', '\u{85}', '\u{9f}', '\u{2028}', '\u{2029}',
+        ];
+        for splitter in splitters {
+            let text = format!("a{splitter}b");
+            let value = super::Json::Object(vec![(
+                text.clone(),
+                super::Json::Array(vec![super::Json::String(text.clone())]),
+            )]);
+            let line = super::write_line(&value);
+            assert!(
+                !line.contains(splitter),
+                "U+{:04X} is raw on the line: {line:?}",
+                u32::from(splitter)
+            );
+            let escaped = format!("a\\u{:04x}b", u32::from(splitter));
+            assert_eq!(line, format!("{{\"{escaped}\":[\"{escaped}\"]}}"));
+            assert_eq!(read(&line).expect("the line reads back"), value);
+            assert!(
+                super::write(&value).contains(splitter),
+                "the canonical writer's escapes moved"
+            );
+        }
+        // The neighbours on either side of each range are written as they are.
+        let kept = "~\u{a0}\u{2027}\u{202a}";
+        let line = super::write_line(&super::Json::String(kept.to_owned()));
+        assert_eq!(line, format!("\"{kept}\""));
     }
 
     /// `read`, with how many key comparisons its duplicate-key check made.

@@ -727,6 +727,21 @@ fn nothing_here_attaches_to_a_seat_from_outside() {
             "0.0.0.0",
             "the gateway binds 127.0.0.1 and ::1 and nothing else, with no flag that widens it",
         ),
+        (
+            "UdpSocket",
+            "no datagram either: nothing here sends anything anywhere (AGENTS.md section 7)",
+        ),
+        (
+            "process::Command",
+            "the game never starts a program: the program outside starts `gamectl`, never the \
+             other way round (AGENTS.md sections 2 and 7; decisions-log item 231)",
+        ),
+        ("Command::new", "the same rule, by the call"),
+        (
+            "env::var",
+            "no command reads the environment: what a command does is on its command line, and \
+             a key in a variable is a key the game would hold (AGENTS.md section 7)",
+        ),
     ];
     for relative in SOURCES {
         let text = source(relative);
@@ -790,8 +805,21 @@ fn no_message_names_the_binary_outside_the_string_table() {
 /// `actual_for`, which strips `expected.` and produces `actual.`. A producer
 /// that could write its own expectation is a producer that cannot fail
 /// (`tests/golden/README.md` rule 4).
+///
+/// Every way the standard library makes or replaces a file is looked for
+/// ([`FILE_MAKERS`]), not `fs::write` alone: the external seat's module makes
+/// its files by `OpenOptions`, `File::create` and a rename, and a scan that
+/// knew one spelling would have stopped seeing it.
 #[test]
 fn nothing_here_writes_a_committed_golden() {
+    /// The calls that make, replace or rename a file.
+    const FILE_MAKERS: &[&str] = &[
+        "fs::write",
+        "fs::copy",
+        "fs::rename",
+        "File::create",
+        "OpenOptions",
+    ];
     let mut writers: Vec<&str> = Vec::new();
     for relative in SOURCES {
         let text = source(relative);
@@ -799,7 +827,7 @@ fn nothing_here_writes_a_committed_golden() {
             if line.trim_start().starts_with("//") {
                 continue;
             }
-            if line.contains("fs::write") || line.contains("fs::copy") {
+            if FILE_MAKERS.iter().any(|maker| line.contains(maker)) {
                 if !writers.contains(relative) {
                     writers.push(relative);
                 }
@@ -817,10 +845,10 @@ fn nothing_here_writes_a_committed_golden() {
             "src/scenario/nightly.rs",
             "src/scenario/run.rs"
         ],
-        "three modules write a file: `external.rs` an ended match's last recap, into the \
-         match's own folder; `run.rs` the fresh chain the `golden` step compares, and \
-         `nightly.rs` the result a run over a seed file writes to `--out`. A third writer is a \
-         third place a golden could be written from"
+        "three modules write a file: `external.rs` its three files in a match's own folder \
+         (the config line, the lock and an ended match's last recap); `run.rs` the fresh chain \
+         the `golden` step compares, and `nightly.rs` the result a run over a seed file writes \
+         to `--out`. A fourth writer is a fourth place a golden could be written from"
     );
     assert!(
         source("src/lib.rs").contains("strip_prefix(\"expected.\")"),

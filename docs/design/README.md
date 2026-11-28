@@ -55,7 +55,8 @@ inventing it (`AGENTS.md` §12).
 v1: everything that executes is Rust — the commander's **operator**, the beacons' **mandates**, the
 units' and buildings' **programs**. Everything the player touches is data: **playbooks** and
 templates as JSONC (canonical `gp.v1` proto JSON plus comments). No script runtime, no MCP, no SDK,
-no published API, no AI seats, no manual control. The Seat Gateway is internal but agent-shaped;
+no published API, no AI inside the game (a local program may play the experimental external seat
+of a headless match, `external-seat.md`), no manual control. The Seat Gateway is internal but agent-shaped;
 script seams are reserved in the proto and never read. The sim is deterministic at 20 Hz on integer
 maths, hashed every tick. Build plan: through S3 as the spec's weeks; after S3, S4 "Signals",
 whose first half is "the three towers", then S5 "Commanders", S6 "Library", S7 "Watch and

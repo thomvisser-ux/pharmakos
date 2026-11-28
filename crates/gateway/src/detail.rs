@@ -9,6 +9,11 @@
 //! timer. **No v1 client is a model, so nothing actually spends those tokens;
 //! the budgets are kept because they are the shape the v1.1 API needs.**"
 //!
+//! (The spec's "Amended after S3" list now reads that sentence with the
+//! experimental external seat, decisions-log item 231: no client inside the
+//! game is a model, and a program that plays the external seat is the first
+//! reader that does spend those tokens.)
+//!
 //! That last sentence is why this module exists at T9 rather than at T13. The
 //! budgets buy this build nothing: the editor, `gamectl` and the built-in
 //! operator are all native processes that read JSON. They are here because T9's
