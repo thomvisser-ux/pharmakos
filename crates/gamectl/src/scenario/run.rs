@@ -49,10 +49,11 @@
 //!
 //! # The match settings a file may name
 //!
-//! One input of a match beyond the triple is the scenario's own key since S1's
-//! first contract pull request (the register's S1-41), and optional. Its
-//! sibling `units_per_seat`, the harness walkers, went with them (S2-16, S2's
-//! plan decision 23).
+//! Two inputs of a match beyond the triple are the scenario's own keys, each
+//! optional: `round_limit` since S1's first contract pull request (the
+//! register's S1-41) and `segment_lengths_ms` since decisions-log item 232.
+//! `round_limit`'s sibling `units_per_seat`, the harness walkers, went with
+//! them (S2-16, S2's plan decision 23).
 //!
 //! * `round_limit` is the sim's
 //!   [`DEFAULT_ROUND_LIMIT`](pharmakos_sim::runner::DEFAULT_ROUND_LIMIT), the
@@ -60,6 +61,11 @@
 //!   (decisions-log item 102 (7)), when the file names none; a scenario that
 //!   plays a match to its end names it, and both readers refuse a limit below
 //!   the file's segment count.
+//! * `segment_lengths_ms` is the match's segment length list, the lobby's
+//!   setting, which the match state hashes. When the file names none it is
+//!   the lengths of the file's own segments; a scenario that replays a match
+//!   played elsewhere states that match's list whole
+//!   (`Scenario::segment_lengths_ms`).
 //!
 //! Absent, both are what every committed chain was produced with, so the keys
 //! moved no chain. `scenarios/README.md` documents them.
@@ -362,8 +368,9 @@ pub struct Audited {
 /// Play one scenario **to the match's end** and say how it ended, asserting
 /// nothing: what `--seeds` does once per seed.
 ///
-/// The file's segments are the match's segment lengths, as they are for
-/// [`play`], and rounds past the last listed segment take the last length, as
+/// The match's segment length list is the file's, as it is for [`play`]
+/// (`segment_lengths_ms` where the file names it, the lengths of its segments
+/// where it does not), and rounds past the list's end take its last length, as
 /// the sim's ladder does (`MatchSettings::segment_lengths_ms`); the match
 /// plays until the sim decides it, which its round limit bounds. Every
 /// `playbook` seat goes through `submit_plan` every round: a refusal is a
@@ -792,7 +799,7 @@ fn open(root: &Path, scenario: &Scenario, rules: RulesTable) -> Result<Surface, 
             seats: count,
             rules: rules.clone(),
             match_settings: MatchSettings {
-                segment_lengths_ms: scenario.segment_lengths_ms(),
+                segment_lengths_ms: scenario.segment_lengths_ms.clone(),
                 round_limit: scenario.round_limit,
             },
         },

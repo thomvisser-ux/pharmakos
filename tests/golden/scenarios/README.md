@@ -11,7 +11,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
 both seats' sealed files. It seats no operator, so it moves with the seed, the
 committed sealed files, the rules and the sim, and not with `crates/operator`
 or `library/`. A diff there means a replay of a kept match has parted from the
-match: say which rule moved it, as for every chain here.
+match: say which rule moved it, as for every chain here. A re-bless also
+retires the claim that this is the match's chain, because it is then this
+harness's: the pull request that moves it either plays the match again through
+the external seat and commits that match's sealed files and chain, or changes
+the scenario's note and this paragraph to say the chain is the harness's own.
 
 **Filled by T11** (the first full-segment hash chain) and T15 (the runner);
 T18b added `against-easy` and T20 the demo scenario, `against-easy-three-rounds`:

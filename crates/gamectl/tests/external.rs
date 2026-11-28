@@ -141,7 +141,7 @@ fn easy_through_the_external_door_plays_the_match_easy_plays_in_process() {
         generator: String::from("v1"),
         rules: String::from("rules/rules.v1.json"),
         round_limit: PARITY_ROUNDS,
-        ladder: None,
+        segment_lengths_ms: PARITY_SEGMENTS_MS.to_vec(),
         seats: vec![
             Seat {
                 seat: 0,
@@ -356,7 +356,7 @@ fn sealed_replay_of(dir: &Path) -> Scenario {
         generator: String::from("v1"),
         rules: String::from("rules/rules.v1.json"),
         round_limit: PARITY_ROUNDS,
-        ladder: None,
+        segment_lengths_ms: PARITY_SEGMENTS_MS.to_vec(),
         seats: vec![sealed(0), sealed(1)],
         segments: PARITY_SEGMENTS_MS
             .into_iter()

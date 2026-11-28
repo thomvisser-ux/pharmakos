@@ -677,6 +677,9 @@ fn a_sealed_seat_and_a_segment_length_list_are_held_to_their_rules() {
         ),
         ("[180000, 0]", "/segment_lengths_ms/1"),
         ("[480001]", "/segment_lengths_ms/0"),
+        // Under a tick: no match opens on it, whether or not the file plays
+        // that round.
+        ("[180000, 300000, 49]", "at least one tick (50)"),
     ] {
         let text = std::fs::read_to_string(root().join(SEALED_REPLAY))
             .expect("the committed scenario")
@@ -687,6 +690,69 @@ fn a_sealed_seat_and_a_segment_length_list_are_held_to_their_rules() {
         assert!(
             outcome.err.contains("/segment_lengths_ms") && outcome.err.contains(wanted),
             "{list}: `{wanted}` is missing:\n{}",
+            outcome.err
+        );
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A `sealed` seat's folder follows the path rule every path in the file
+/// follows, a `sealed` that is no string names no folder, and a segment plays
+/// at least a tick (decisions-log item 232 (7)).
+#[test]
+fn a_sealed_folder_follows_the_path_rule_and_a_segment_plays_a_tick() {
+    let path = scratch("malformed-sealed-paths");
+    let named = path.to_string_lossy().into_owned();
+    for (from, to, pointer, wanted) in [
+        (
+            "sealed-replay/seat-0\"",
+            "sealed-replay/seat-0/\"",
+            "/seats/0/sealed",
+            "no empty or `.` part",
+        ),
+        (
+            "\"scenarios/s4/sealed-replay/seat-0\"",
+            "\"C:/match/seat-0\"",
+            "/seats/0/sealed",
+            "no `:`",
+        ),
+        (
+            "\"scenarios/s4/sealed-replay/seat-0\"",
+            "\"scenarios/../scenarios/s4/sealed-replay/seat-0\"",
+            "/seats/0/sealed",
+            "no `..`",
+        ),
+        (
+            "\"sealed\": \"scenarios/s4/sealed-replay/seat-0\"",
+            "\"sealed\": 7",
+            "/seats/0/sealed",
+            "names the folder",
+        ),
+        (
+            "\"length_ms\": 180000",
+            "\"length_ms\": 49",
+            "/segments/0/length_ms",
+            "at least one tick, 50",
+        ),
+    ] {
+        let committed =
+            std::fs::read_to_string(root().join(SEALED_REPLAY)).expect("the committed scenario");
+        let text = committed.replace(from, to);
+        assert_ne!(text, committed, "`{from}` was not found");
+        std::fs::write(&path, text.as_bytes()).expect("the scratch file");
+        let outcome = gamectl(&["scenario", "run", &named]);
+        assert_eq!(outcome.code, Exit::Input, "{to}: {}", outcome.err);
+        assert!(
+            outcome.err.contains(pointer) && outcome.err.contains(wanted),
+            "{to}: `{pointer}` or `{wanted}` is missing:\n{}",
+            outcome.err
+        );
+        // A path that leaves the tree is said once, and never probed for
+        // its rounds.
+        assert_eq!(
+            outcome.err.matches(pointer).count(),
+            1,
+            "{to}: `{pointer}` is said more than once:\n{}",
             outcome.err
         );
     }

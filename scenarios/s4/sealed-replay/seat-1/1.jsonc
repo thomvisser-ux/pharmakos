@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later AND (MIT OR Apache-2.0)
 //
 // hold_and_build.jsonc: the Hold & Build template (decisions-log items 81 and
 // 113 (6)).

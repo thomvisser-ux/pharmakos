@@ -49,6 +49,7 @@ pub mod seeds;
 use std::path::Path;
 
 use pharmakos_proto::json::Json;
+use pharmakos_sim::math::quantity::MS_PER_TICK;
 
 use crate::exit::Failure;
 use crate::strings;
@@ -148,8 +149,10 @@ pub enum SeatKind {
     /// path from the repository root, holds `<round>.jsonc` for every round
     /// the scenario plays, the names and the bytes a match's own
     /// `seats/<seat>/sealed/` folder holds ([`sealed_file`]). Each goes
-    /// through `submit_plan`, the door it was sealed through, and a refusal
-    /// fails the run: the harness door is never taken for it, because a
+    /// through `submit_plan`, the door a seat's own playbook is sealed
+    /// through (a filed safe playbook goes through it here for the first
+    /// time), and a refusal fails the run: the harness door is never taken
+    /// for it, because a
     /// replay that seals what no seat could have submitted replays nothing
     /// (decisions-log item 232).
     Sealed(String),
@@ -229,14 +232,15 @@ pub struct Scenario {
     /// `DEFAULT_ROUND_LIMIT`. Never fewer than the segments.
     pub round_limit: u32,
     /// The match's segment length list, the lobby's setting
-    /// (`MatchSettings::segment_lengths_ms`): the `segment_lengths_ms` key,
-    /// or `None` for a file that names none, whose match takes the lengths
-    /// of its own segments, as every match did before the key existed. The
-    /// list is hashed with the match, so a file that replays a match played
-    /// somewhere else (a `sealed` seat's) states that match's list, which may
-    /// be longer than the rounds the file plays. Every segment's length is
-    /// its round's in this list ([`length_for_round`]).
-    pub ladder: Option<Vec<i32>>,
+    /// (`MatchSettings::segment_lengths_ms`), never empty: the
+    /// `segment_lengths_ms` key, or for a file that names none the lengths of
+    /// its own segments, as every match took before the key existed; the
+    /// reader resolves which. The list is hashed with the match, so a file
+    /// that replays a match played somewhere else (a `sealed` seat's) states
+    /// that match's list, which may be longer than the rounds the file plays.
+    /// Every segment's length is its round's in this list: its own entry, and
+    /// past the end the last one.
+    pub segment_lengths_ms: Vec<i32>,
     /// One to three seats, in seat order.
     pub seats: Vec<Seat>,
     /// One or more segments, in order.
@@ -249,18 +253,6 @@ pub struct Scenario {
 }
 
 impl Scenario {
-    /// The segment length list the match is opened with: the file's own, or
-    /// the lengths of its segments.
-    #[must_use]
-    pub fn segment_lengths_ms(&self) -> Vec<i32> {
-        self.ladder.clone().unwrap_or_else(|| {
-            self.segments
-                .iter()
-                .map(|segment| segment.length_ms)
-                .collect()
-        })
-    }
-
     /// How many ticks the whole scenario plays, at 20 Hz.
     ///
     /// # Errors
@@ -462,7 +454,7 @@ fn read(
     let segments = read_segments(json, problems);
     check_sealed_rounds(root, &seats, segments.len(), problems);
     let round_limit = read_match_settings(json, segments.len(), problems);
-    let ladder = read_ladder(json, &segments, problems);
+    let segment_lengths_ms = read_ladder(json, &segments, problems);
     let assertions = read_assertions(root, json, nightly, problems);
 
     Some(Scenario {
@@ -473,7 +465,7 @@ fn read(
         generator: generator?,
         rules,
         round_limit,
-        ladder,
+        segment_lengths_ms: segment_lengths_ms?,
         seats,
         segments,
         assertions,
@@ -481,21 +473,28 @@ fn read(
     })
 }
 
-/// The length round `index + 1` plays under a segment length list: its own
-/// entry, and past the end the last one, the sim's rule
-/// (`MatchSettings::segment_lengths_ms`). `None` for an empty list.
-#[must_use]
-pub fn length_for_round(ladder: &[i32], index: usize) -> Option<i32> {
-    ladder.get(index).or(ladder.last()).copied()
-}
-
-/// The optional `segment_lengths_ms` key: one to
+/// The match's segment length list, or `None` with the problem said.
+///
+/// The optional `segment_lengths_ms` key holds one to
 /// [`pharmakos_sim::rules::MAX_SEGMENT_LENGTHS`] lengths, each a segment's
 /// length by the rule a segment's own is held to, and every segment the file
-/// plays the length its round takes from the list.
+/// plays the length its round takes from the list: its own entry, and past
+/// the end the last one, the sim's rule
+/// (`MatchSettings::segment_lengths_ms`). A file that names no list plays a
+/// match whose list is the lengths of its own segments.
 fn read_ladder(json: &Json, segments: &[Segment], problems: &mut Problems) -> Option<Vec<i32>> {
-    let value = json.get("segment_lengths_ms")?;
+    let Some(value) = json.get("segment_lengths_ms") else {
+        return Some(segments.iter().map(|segment| segment.length_ms).collect());
+    };
     let most = pharmakos_sim::rules::MAX_SEGMENT_LENGTHS;
+    let count = |problems: &mut Problems, held: usize| {
+        problems.at(
+            "/segment_lengths_ms",
+            format!(
+                "a match's segment length list holds 1 to {most} lengths; this one holds {held}"
+            ),
+        );
+    };
     let Json::Array(entries) = value else {
         problems.at(
             "/segment_lengths_ms",
@@ -506,25 +505,21 @@ fn read_ladder(json: &Json, segments: &[Segment], problems: &mut Problems) -> Op
         );
         return None;
     };
-    if entries.is_empty() || entries.len() > most {
-        problems.at(
-            "/segment_lengths_ms",
-            format!(
-                "a match's segment length list holds 1 to {most} lengths; this one holds {}",
-                entries.len()
-            ),
-        );
+    if entries.len() > most {
+        count(problems, entries.len());
         return None;
     }
     let mut ladder: Vec<i32> = Vec::with_capacity(entries.len());
     for (index, entry) in entries.iter().enumerate() {
         match integer_as::<i32>(Some(entry)) {
-            Some(Ok(length)) if length > 0 && length <= MAX_SEGMENT_MS => ladder.push(length),
+            Some(Ok(length)) if (MS_PER_TICK..=MAX_SEGMENT_MS).contains(&length) => {
+                ladder.push(length);
+            }
             _ => problems.at(
                 &format!("/segment_lengths_ms/{index}"),
                 format!(
-                    "a segment length is a positive count of game milliseconds, at most \
-                     {MAX_SEGMENT_MS}, spec §3's eight minutes"
+                    "a segment length is a positive count of game milliseconds, at least one \
+                     tick ({MS_PER_TICK}) and at most {MAX_SEGMENT_MS}, spec §3's eight minutes"
                 ),
             ),
         }
@@ -532,15 +527,22 @@ fn read_ladder(json: &Json, segments: &[Segment], problems: &mut Problems) -> Op
     if ladder.len() != entries.len() {
         return None;
     }
+    // An empty list has no last length for the rounds past its end.
+    let Some(last) = ladder.last().copied() else {
+        count(problems, 0);
+        return None;
+    };
     for segment in segments {
-        let wanted = length_for_round(&ladder, segment.index);
-        if wanted != Some(segment.length_ms) {
+        let wanted = match ladder.get(segment.index) {
+            Some(own) => *own,
+            None => last,
+        };
+        if wanted != segment.length_ms {
             problems.at(
                 &format!("/segments/{}/length_ms", segment.index),
                 format!(
-                    "`segment_lengths_ms` gives this round {} game milliseconds, and the segment \
-                     says {}; a segment plays the length its round has in the match",
-                    wanted.map_or_else(|| String::from("no"), |length| length.to_string()),
+                    "`segment_lengths_ms` gives this round {wanted} game milliseconds, and the \
+                     segment says {}; a segment plays the length its round has in the match",
                     segment.length_ms
                 ),
             );
@@ -580,8 +582,9 @@ fn check_sealed_rounds(root: &Path, seats: &[Seat], segments: usize, problems: &
         let SeatKind::Sealed(folder) = &seat.kind else {
             continue;
         };
-        if !root.join(folder).is_dir() {
-            // Already said, at the same pointer, by `read_seats`.
+        if leaves_the_repository(folder) || !root.join(folder).is_dir() {
+            // Already said, at the same pointer, by `read_kind`, and a path
+            // that leaves the tree is never probed.
             continue;
         }
         let missing = (1..=segments)
@@ -812,15 +815,27 @@ fn read_segments(json: &Json, problems: &mut Problems) -> Vec<Segment> {
             ),
         }
         match integer_as::<i32>(segment.get("length_ms")) {
-            Some(Ok(length)) if length > 0 && length <= MAX_SEGMENT_MS => read.push(Segment {
-                index,
-                length_ms: length,
-            }),
+            Some(Ok(length)) if (MS_PER_TICK..=MAX_SEGMENT_MS).contains(&length) => {
+                read.push(Segment {
+                    index,
+                    length_ms: length,
+                });
+            }
             Some(Ok(length)) if length > MAX_SEGMENT_MS => problems.at(
                 &format!("{base}/length_ms"),
                 format!(
                     "a segment plays at most {MAX_SEGMENT_MS} game milliseconds, spec §3's eight \
                      minutes; found {length}"
+                ),
+            ),
+            // The gateway opens no match on a segment under a tick
+            // (`Host::check_settings`), so the file is refused here, with its
+            // pointer, rather than the run on a match that would not open.
+            Some(Ok(length)) if length > 0 => problems.at(
+                &format!("{base}/length_ms"),
+                format!(
+                    "a segment plays at least one tick, {MS_PER_TICK} game milliseconds: no \
+                     match opens on a shorter one; found {length}"
                 ),
             ),
             Some(_) => problems.at(
@@ -837,8 +852,9 @@ fn read_segments(json: &Json, problems: &mut Problems) -> Vec<Segment> {
     read
 }
 
-/// The match setting a scenario may name (the register's S1-41, taken in S1's
-/// first contract pull request): `round_limit`, optional, and absent what every
+/// `round_limit`, one of the two match settings a scenario may name (the
+/// register's S1-41, taken in S1's first contract pull request; the other is
+/// `segment_lengths_ms`, [`read_ladder`]): optional, and absent what every
 /// chain committed before the key existed was produced with, so adding it moved
 /// no chain. Its sibling `units_per_seat`, the harness walkers, went with them
 /// (S2-16, S2's plan decision 23): a file that still names it is refused as an
@@ -1179,15 +1195,20 @@ fn check_path(
 }
 
 /// Whether `relative` is anything but a path from the repository root that
-/// stays inside it.
+/// stays inside it, spelled the one way the format takes.
+///
+/// An empty part is a leading slash, a trailing one or a doubled one, and the
+/// empty path; a `:` is a Windows drive, which `Path::join` would follow out
+/// of the tree, or a stream name. `xtask/src/scenario.rs` holds the same
+/// function, xtask being std-only, and both crates' tests run their copy over
+/// `tests/corpus/scenario-paths.txt` (decisions-log item 232 (7)).
 fn leaves_the_repository(relative: &str) -> bool {
-    relative.is_empty()
-        || relative.contains('\\')
-        || relative.starts_with('/')
-        || relative.split('/').any(|part| part == ".." || part.is_empty())
-        // A Windows drive letter is an absolute path that does not start with
-        // a slash, so the check above does not see it.
-        || relative.as_bytes().get(1) == Some(&b':')
+    relative.contains('\\')
+        || relative.contains(':')
+        || relative.contains("..")
+        || relative
+            .split('/')
+            .any(|part| part.is_empty() || part == ".")
 }
 
 /// [`check_path`] for a folder that must exist.
@@ -1211,8 +1232,36 @@ fn check_folder(root: &Path, pointer: &str, relative: &str, problems: &mut Probl
 mod tests {
     use super::{
         ASSERTIONS, Json, MAX_SEGMENT_MS, Problems, RESERVED_ASSERTIONS, TOP_LEVEL_KEYS,
-        parse_seed, read_match_settings, read_segments, ticks_of,
+        leaves_the_repository, parse_seed, read_match_settings, read_segments, ticks_of,
     };
+
+    /// The path rule's shared cases: `xtask`'s reader runs the same file
+    /// through its own copy of the rule, so the two cannot part unseen
+    /// (decisions-log item 232 (7)).
+    #[test]
+    fn the_path_rule_answers_the_shared_cases() {
+        let text = include_str!("../tests/corpus/scenario-paths.txt");
+        let mut accepted = 0_u32;
+        let mut refused = 0_u32;
+        for line in text.lines().filter(|line| !line.starts_with('#')) {
+            let (verdict, path) = line.split_once(' ').unwrap_or((line, ""));
+            assert!(
+                matches!(verdict, "accept" | "refuse"),
+                "`{line}` is neither an `accept` nor a `refuse` case"
+            );
+            let refuse = verdict == "refuse";
+            assert_eq!(leaves_the_repository(path), refuse, "`{path}`");
+            if refuse {
+                refused += 1;
+            } else {
+                accepted += 1;
+            }
+        }
+        assert!(
+            accepted >= 5 && refused >= 10,
+            "{accepted} accepted, {refused} refused"
+        );
+    }
 
     fn object(text: &str) -> Json {
         pharmakos_proto::json::read(text).expect("test JSON")

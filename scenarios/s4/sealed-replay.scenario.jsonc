@@ -17,8 +17,8 @@
 //           chain does not move with crates/operator or library/: those
 //           decided what the files say, and the files are committed.
 //
-// Every file goes through `submit_plan` in its round, the door it was sealed
-// through, and a refusal fails the run (scenarios/README.md, "A `sealed`
+// Every file goes through `submit_plan` in its round, the door a seat's own
+// playbook is sealed through, and a refusal fails the run (scenarios/README.md, "A `sealed`
 // seat"). The chain below is the match's own: the two files of its replay/
 // folder, one after the other, unchanged. So this scenario holds two claims:
 // the seats' sealed files are the whole of what they put into a match, and a

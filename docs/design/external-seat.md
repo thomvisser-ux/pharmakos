@@ -151,8 +151,8 @@ sealed in each round, and `replay/<round>.hashes.txt` is the chain the round wro
 format's `sealed` seat kind seals those files again, round by round, through `submit_plan`, so a
 match worth keeping is committed as a scenario by copying the `sealed/` folders and the chain
 (`scenarios/README.md`, "A `sealed` seat replays what a match sealed"). A match `match new`
-started took the rules table's segment lengths, so its scenario states them whole in
-`segment_lengths_ms`. `scenarios/s4/sealed-replay.scenario.jsonc` is such a match.
+started took the rules table's segment lengths (its `match.json` holds an empty list), so its
+scenario states them whole in `segment_lengths_ms`. `scenarios/s4/sealed-replay.scenario.jsonc` is such a match.
 
 ## Game text is data
 

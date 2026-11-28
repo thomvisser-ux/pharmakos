@@ -5,7 +5,7 @@
 //! makes before it plays a file.
 //!
 //! A scenario is a headless match written down: **a map seed, the rules table,
-//! one playbook per seat, the segment list, and assertions on events *and* on
+//! each seat's playbooks, the segment list, and assertions on events *and* on
 //! the hash chain** (AGENTS.md section 9 item 10, section 10 item 4). The first
 //! three are exactly AGENTS.md section 4's triple — "the sim is a pure function
 //! of (map seed, playbooks, rules hash)" — which is what makes a committed hash
@@ -114,8 +114,16 @@ const TOP_LEVEL_KEYS: &[&str] = &[
 
 /// The most lengths a match's segment length list holds: the sim's
 /// `MAX_SEGMENT_LENGTHS` (`crates/sim/src/rules.rs`). xtask is std-only and
-/// cannot name it, and `gamectl`'s reader, which can, refuses the same files.
-const MAX_SEGMENT_LENGTHS: usize = 8;
+/// cannot name it, so `crates/gamectl/tests/parity.rs` pins this copy to it,
+/// and `gamectl`'s reader, which names the sim's, refuses the same files.
+pub(crate) const MAX_SEGMENT_LENGTHS: usize = 8;
+
+/// The shortest segment a match opens on: one tick, the sim's `MS_PER_TICK`
+/// (`crates/sim/src/math/quantity.rs`). The gateway opens no match on a
+/// shorter length, so both readers refuse one in the file, with its pointer,
+/// rather than leave the run to fail on a match that would not open.
+/// `crates/gamectl/tests/parity.rs` pins this copy to the sim's as well.
+pub(crate) const MS_PER_TICK: i64 = 50;
 
 /// The longest segment a scenario may play, in game milliseconds: spec
 /// section 3's "the world then runs for up to 8 minutes", the top of the 3 / 5
@@ -584,12 +592,19 @@ fn check_segments(json: &Json, problems: &mut Vec<Problem>) -> usize {
         }
 
         match integer(segment.get("length_ms")) {
-            Some(number) if number > 0 && number <= MAX_SEGMENT_MS => {}
+            Some(number) if (MS_PER_TICK..=MAX_SEGMENT_MS).contains(&number) => {}
             Some(number) if number > MAX_SEGMENT_MS => problems.push(Problem::new(
                 &format!("{base}/length_ms"),
                 format!(
                     "a segment plays at most {MAX_SEGMENT_MS} game milliseconds, spec section \
                      3's eight minutes; found {number}"
+                ),
+            )),
+            Some(number) if number > 0 => problems.push(Problem::new(
+                &format!("{base}/length_ms"),
+                format!(
+                    "a segment plays at least one tick, {MS_PER_TICK} game milliseconds: no \
+                     match opens on a shorter one; found {number}"
                 ),
             )),
             Some(number) => problems.push(Problem::new(
@@ -608,8 +623,9 @@ fn check_segments(json: &Json, problems: &mut Vec<Problem>) -> usize {
     segments.len()
 }
 
-/// The match setting a scenario may name (the register's S1-41, taken in S1's
-/// first contract pull request): `round_limit`, the round the match ends on,
+/// `round_limit`, one of the two match settings a scenario may name (the
+/// register's S1-41, taken in S1's first contract pull request; the other is
+/// `segment_lengths_ms`, [`check_ladder`]): the round the match ends on,
 /// optional, and absent what every committed chain was produced with, the
 /// sim's `DEFAULT_ROUND_LIMIT`. Its sibling `units_per_seat`, the harness
 /// walkers, went with them (S2-16, S2's plan decision 23): a file that still
@@ -679,12 +695,15 @@ fn check_ladder(json: &Json, problems: &mut Vec<Problem>) {
     let mut ladder: Vec<i64> = Vec::with_capacity(entries.len());
     for (index, entry) in entries.iter().enumerate() {
         match integer(Some(entry)) {
-            Some(number) if number > 0 && number <= MAX_SEGMENT_MS => ladder.push(number),
+            Some(number) if (MS_PER_TICK..=MAX_SEGMENT_MS).contains(&number) => {
+                ladder.push(number);
+            }
             _ => problems.push(Problem::new(
                 &format!("/segment_lengths_ms/{index}"),
                 format!(
-                    "a segment length is a positive count of game milliseconds, at most \
-                     {MAX_SEGMENT_MS}, spec section 3's eight minutes"
+                    "a segment length is a positive count of game milliseconds, at least one \
+                     tick ({MS_PER_TICK}) and at most {MAX_SEGMENT_MS}, spec section 3's eight \
+                     minutes"
                 ),
             )),
         }
@@ -916,14 +935,23 @@ fn check_repository_path(
 }
 
 /// What a path in a scenario file must be.
-const PATH_RULE: &str = "paths are relative to the repository root, use forward slashes, and \
-                         never contain `..` — a scenario names files in the tree and nothing \
-                         outside it";
+const PATH_RULE: &str = "paths are relative to the repository root, use forward slashes, have \
+                         no empty or `.` part and no `:`, and never contain `..` — a scenario \
+                         names files in the tree and nothing outside it";
 
 /// Whether `value` is anything but a path from the repository root that
-/// stays inside it.
+/// stays inside it, spelled the one way the format takes.
+///
+/// An empty part is a leading slash, a trailing one or a doubled one, and the
+/// empty path; a `:` is a Windows drive, which `Path::join` would follow out
+/// of the tree, or a stream name. `crates/gamectl/src/scenario.rs` holds the
+/// same function, and both crates' tests run their copy over
+/// `crates/gamectl/tests/corpus/scenario-paths.txt`.
 fn leaves_the_repository(value: &str) -> bool {
-    value.starts_with('/') || value.contains('\\') || value.contains("..")
+    value.contains('\\')
+        || value.contains(':')
+        || value.contains("..")
+        || value.split('/').any(|part| part.is_empty() || part == ".")
 }
 
 /// [`check_repository_path`] for a folder that must exist.
@@ -1544,6 +1572,14 @@ mod tests {
             ("sealed/seat-0", "sealed/nowhere", "is not a folder"),
             (r#", "sealed": "sealed/seat-0""#, "", "names the folder"),
             ("sealed/seat-0", "../seat-0", "never contain `..`"),
+            ("sealed/seat-0", "sealed/seat-0/", "no empty or `.` part"),
+            ("sealed/seat-0", "sealed//seat-0", "no empty or `.` part"),
+            ("sealed/seat-0", "C:/sealed/seat-0", "no `:`"),
+            (
+                r#""sealed": "sealed/seat-0""#,
+                r#""sealed": 7"#,
+                "names the folder",
+            ),
         ] {
             let path = write(&dir, &body.replace(from, to));
             let report = validate(&dir, &path).expect_err("rejected");
@@ -1597,11 +1633,60 @@ mod tests {
             ),
             ("[180000, 0]", "/segment_lengths_ms/1", "a positive count"),
             ("[480001]", "/segment_lengths_ms/0", "at most 480000"),
+            // Under a tick: no match opens on it, whether or not the file
+            // plays that round.
+            (
+                "[180000, 49]",
+                "/segment_lengths_ms/1",
+                "at least one tick (50)",
+            ),
         ] {
             let report = validate(&dir, &write(&dir, &with(list))).expect_err("rejected");
             assert!(report.contains(pointer), "{list}: {report}");
             assert!(report.contains(wanted), "{list}: {report}");
         }
+
+        // A segment's own length is held to the same floor.
+        let short = GOOD.replace(r#""length_ms": 180000"#, r#""length_ms": 49"#);
+        assert_ne!(short, GOOD, "the segment line was not found");
+        let report = validate(&dir, &write(&dir, &short)).expect_err("rejected");
+        assert!(report.contains("/segments/0/length_ms"), "{report}");
+        assert!(report.contains("at least one tick, 50"), "{report}");
+        let tick = GOOD.replace(r#""length_ms": 180000"#, r#""length_ms": 50"#);
+        validate(&dir, &write(&dir, &tick)).expect("one tick is a segment");
+    }
+
+    /// The path rule's shared cases: `gamectl`'s reader runs the same file
+    /// through its own copy of the rule, so the two cannot part unseen
+    /// (decisions-log item 232 (7)).
+    #[test]
+    fn the_path_rule_answers_the_shared_cases() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask sits under the workspace root")
+            .to_path_buf();
+        let text = fs::read_to_string(root.join("crates/gamectl/tests/corpus/scenario-paths.txt"))
+            .expect("the shared path cases");
+        let mut accepted = 0_u32;
+        let mut refused = 0_u32;
+        for line in text.lines().filter(|line| !line.starts_with('#')) {
+            let (verdict, path) = line.split_once(' ').unwrap_or((line, ""));
+            assert!(
+                matches!(verdict, "accept" | "refuse"),
+                "`{line}` is neither an `accept` nor a `refuse` case"
+            );
+            let refuse = verdict == "refuse";
+            assert_eq!(leaves_the_repository(path), refuse, "`{path}`");
+            if refuse {
+                refused += 1;
+            } else {
+                accepted += 1;
+            }
+        }
+        assert!(
+            accepted >= 5 && refused >= 10,
+            "{accepted} accepted, {refused} refused"
+        );
     }
 
     #[test]

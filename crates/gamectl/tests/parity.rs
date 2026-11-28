@@ -115,10 +115,10 @@ fn the_headless_runners_chain_equals_the_client_paths_for_the_same_seed() {
 // Parity of the two scenario readers
 // ---------------------------------------------------------------------------
 
-/// The value of a `pub(crate) const NAME: i64 = <n>;` line in
+/// The value of a `pub(crate) const NAME: <type> = <n>;` line in
 /// `xtask/src/scenario.rs`, which is std-only and cannot be linked from here.
-fn xtask_constant(source: &str, name: &str) -> i64 {
-    let prefix = format!("pub(crate) const {name}: i64 = ");
+fn xtask_constant(source: &str, name: &str, of: &str) -> i64 {
+    let prefix = format!("pub(crate) const {name}: {of} = ");
     let line = source
         .lines()
         .find_map(|line| line.strip_prefix(&prefix))
@@ -132,7 +132,10 @@ fn xtask_constant(source: &str, name: &str) -> i64 {
 /// `gamectl`'s reader and `xtask`'s refuse the same files, so the numbers they
 /// refuse by are the same numbers: the longest segment, which is also the top
 /// of the rules table's `match.segment_lengths_ms` ladder (spec §3's eight
-/// minutes); and the round limit a file that names none plays to, the sim's `DEFAULT_ROUND_LIMIT`. A re-tune of the
+/// minutes); the shortest, one tick, and the most lengths a match's list
+/// holds, the sim's `MS_PER_TICK` and `MAX_SEGMENT_LENGTHS` (decisions-log
+/// item 232 (7)); and the round limit a file that names none plays to, the
+/// sim's `DEFAULT_ROUND_LIMIT`. A re-tune of the
 /// ladder's top fails here rather than having both readers refuse a scenario
 /// that plays the real longest segment.
 #[test]
@@ -140,12 +143,20 @@ fn the_two_scenario_readers_refuse_by_the_same_numbers() {
     let source = std::fs::read_to_string(root().join("xtask/src/scenario.rs"))
         .expect("xtask/src/scenario.rs");
     assert_eq!(
-        xtask_constant(&source, "MAX_SEGMENT_MS"),
+        xtask_constant(&source, "MAX_SEGMENT_MS", "i64"),
         i64::from(scenario::MAX_SEGMENT_MS)
     );
     assert_eq!(
-        xtask_constant(&source, "DEFAULT_ROUND_LIMIT"),
+        xtask_constant(&source, "DEFAULT_ROUND_LIMIT", "i64"),
         i64::from(DEFAULT_ROUND_LIMIT)
+    );
+    assert_eq!(
+        xtask_constant(&source, "MS_PER_TICK", "i64"),
+        i64::from(pharmakos_sim::math::quantity::MS_PER_TICK)
+    );
+    assert_eq!(
+        usize::try_from(xtask_constant(&source, "MAX_SEGMENT_LENGTHS", "usize")).ok(),
+        Some(pharmakos_sim::rules::MAX_SEGMENT_LENGTHS)
     );
 
     let rules = RulesTable::load(&root().join("rules/rules.v1.json")).expect("the rules table");

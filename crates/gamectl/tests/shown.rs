@@ -36,13 +36,14 @@ fn a_path_an_operand_or_a_name_the_user_typed_is_printed_escaped() {
             &[(
                 format!("/{HOSTILE}"),
                 format!(
-                    "`{}` must be one of playbook, safe, builtin",
+                    "`{}` must be one of playbook, sealed, safe, builtin",
                     pharmakos_proto::json::grammar::escaped(HOSTILE)
                 ),
             )],
         ),
         strings::scenario_heading(HOSTILE, 2, 10, "0"),
         strings::scenario_playbook_refused(0, HOSTILE, "why"),
+        strings::sealed_replay_refused(0, HOSTILE, 1, "why"),
         strings::scenario_event_missing(HOSTILE, None, &[HOSTILE.to_owned()]),
         strings::scenario_passed(HOSTILE, 1),
         strings::seeds_refused(HOSTILE, "why"),
