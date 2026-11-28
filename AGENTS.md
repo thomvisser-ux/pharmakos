@@ -29,7 +29,7 @@ spikes are closed, frozen at the `spike-end` tag and deleted from `main`;
 their measured results and their lessons for the skeleton live under `docs/spikes/`, and reading the
 spike code means `git worktree add ../pharmakos-spikes spike-end`. The walking skeleton is closed
 (decisions-log item 126, 2026-09-29), S1 is closed (decisions-log items 139 and 143, 2026-10-16), S2 is
-closed (decisions-log item 155, 2026-10-28), S3 is closed (decisions-log item 226, 2026-11-27), the stage that follows S3 is S4 "Signals", whose first half is "the three towers" (decisions-log item 227), and every crate in §3 has code; mark any value
+closed (decisions-log item 155, 2026-10-28), S3 is closed (decisions-log item 226, 2026-11-27), the stage that follows S3 is S4 "Signals", whose first half is "the three towers" (decisions-log item 227) and is planned in `docs/design/s4-plan.md` (decisions-log item 229), `main` carries `0.4.0-dev` throughout S4 (§9, "Versions and tags"), and every crate in §3 has code; mark any value
 you had to guess with a `PLACEHOLDER` comment naming who fixes it and when.
 
 ---
@@ -45,8 +45,11 @@ to change anything is to walk the **commander** to a **beacon** and interface on
 change*. Beacons are the unit of power and carry **mandates** (Build, Defend, Attack, Mine, Survey);
 units and buildings run **programs**; money is `$` and power is `kW`; the world is destructible
 voxels under a permanent ash sky. Radio exists only once a Radio Mast is earned, carries data and
-never control, and is treated as untrusted input. Everything is deterministic, seeded and hashed, so
-a match replays bit-for-bit on every platform.
+never control, and is treated as untrusted input. From S4, trust in a beacon's machines is earned
+per beacon, by the commander's own hand (its **holdfast**; surety and the first round's match
+setting are the exceptions), and a seat's beacons pass marks by buried cable before radio
+(decisions-log item 229; `docs/design/holdfast.md`). Everything is deterministic, seeded and
+hashed, so a match replays bit-for-bit on every platform.
 
 ## 2. The v1 rule
 
@@ -55,10 +58,15 @@ a match replays bit-for-bit on every platform.
 Three levels of behaviour ship built-in and native: the commander's **operator** (generates a
 playbook, files the safe playbook on a miss, executes whatever the seat sealed), the beacons'
 **mandates**, and the units' and buildings' **programs**. Programs are built in until S4's rule
-cards; from then they are authored as rule cards, each with a built-in default (the basic tower's,
-decisions-log item 227, point 36). The player authors exactly one thing, until S4's rule cards
-(decisions-log item 227): the playbook, a JSONC file (canonical `gp.v1` proto JSON plus comments)
-written in the in-game editor or by hand.
+cards; from then a program is a **rote**, a short numbered list of rule cards that the player can
+open, edit and write (the main session's design; the owner can veto), and each kind of machine
+ships a basic rote as its built-in default (the basic tower's first; decisions-log items 227,
+point 36, and 229; `docs/design/holdfast.md`). Until
+S4's rule cards the player authors exactly one thing, the playbook, a JSONC file (canonical `gp.v1`
+proto JSON plus comments) written in the in-game editor or by hand; from then the player authors
+the playbook **and the rotes it carries** (decisions-log item 229, on the owner's points 20, 28 and
+36): the commander installs a rote at a beacon by hand, as one more row of a visit, and the sealed
+playbook carries the rote inside it (the main session's design; the owner can veto).
 
 **Rule cards** are decided as the form in which a unit's or a structure's program is authored
 (decisions-log item 227, the owner's points 20, 28 and 36; point 28's picked option says "AGENTS.md
@@ -67,9 +75,12 @@ the verifier before the Push, bounded in size and cost, guaranteed to finish, an
 executes. Every ban below stands: no script engine, no script runtime, no interpreter for user
 text; on the main session's reading of point 28's boundary (the owner can veto), a rule card is
 data the Rust sim interprets, as a playbook is. Real code stays out until the cards are proven, and
-then arrives only as another way to write the same tables. Rule cards are not yet built: the first
-build is towers only, in the three towers, the first half of S4 (§10; the owner did not pick
-"Towers and units together", point 36).
+then arrives only as another way to write the same tables. A rote is the same kind of data: a
+closed vocabulary, verified before the Push, bounded, guaranteed to finish, never text that
+executes. Rule cards and rotes are not yet built, and decisions-log item 229 changes no proto seam:
+the `program {builtin|script}` seam below stays reserved and unread. The first build is towers
+only, in the three towers, the first half of S4 (§10; the owner did not pick "Towers and units
+together", point 36).
 
 Consequences that bind every change you make:
 
@@ -756,10 +767,11 @@ of that premise.
 - **Secrecy.** Playbooks, drafts, the seat notebook and the private replay cache never leave the
   gateway for another seat. On a local host this is enforcement, not cryptography: the private match
   cache is plain local state, and the spec says so out loud. Do not claim more.
-- **No filesystem or network access through playbooks or rule cards.** A playbook is data with a
-  closed vocabulary, and so is a rule card (§2, decisions-log item 227). There is no verb that reads
-  a path, opens a socket, shells out or loads code, in either, and none may be added. The template/sample library is a local folder the gateway *reads* to list and
-  instantiate; nothing in it executes.
+- **No access to the host's filesystem or the host's network through playbooks, rule cards or
+  rotes.** A playbook is data with a closed vocabulary, and so are a rule card and a rote (§2,
+  decisions-log items 227 and 229). There is no verb that reads a path, opens a socket, shells out
+  or loads code, in any of them, and none may be added. The template/sample library is a local
+  folder the gateway *reads* to list and instantiate; nothing in it executes.
 - **A player's text is quoted wherever a person is shown it.** Where a person is shown a sentence
   built by `proto`, `plan-core`, the verifier or the gateway, a player's text in it is quoted:
   `Quoted` is the text escaped and capped, and `Said` is built from a `&'static str`, a number, a
@@ -1064,7 +1076,11 @@ merge train's local check.
 
 **The docs-only fast path.** A pull request whose merge commit changes only `docs/**`, `AGENTS.md`,
 `CLAUDE.md`, `.claude/**` and top-level `*.md` runs the DCO walk and the `reuse` step in place of the
-suite; either can still fail it. Every other required job skips its remaining steps and reports
+suite; either can still fail it. A file a test reads is never prose, wherever it lies
+(decisions-log item 230): `CHANGELOG.md` (the version test), `docs/design/s3-plan.md` (the bench's
+certifying test) and the `.jsonc` and `.json` files under `docs/demo` (the reader corpus walks
+that folder). A test that starts to read a file on the allow-list adds it to the lists in
+`xtask/src/scope.rs` (`READ_BY_THE_SUITE`, `CORPUS_UNDER_PROSE`) in the same pull request. Every other required job skips its remaining steps and reports
 success; each job that builds, and the cross-OS guard, says so in a `::notice::`. Each building
 job's scope step decides (each shard, not the leg's `cargo xtask ci (<os>)` job, which takes prose
 only when every one of its shards' reports says so): it answers `full` in bash,
@@ -1115,17 +1131,25 @@ string is what tells a milestone build from its stage's close). `package.rs`'s t
 `[workspace.package] version` stays `0.0.0` (item 117 (2)), so `gamectl --version` prints `0.0.0`
 and the note's build line names the build. **A version's life** (the main session's reading of
 point 41; the owner can veto): the commit a tag goes on carries `VERSION` equal to the tag's
-version. It is the merge commit of a pull request that does nothing but set the version: it sets
-`VERSION` and the preset, and renames `CHANGELOG.md`'s `-dev` section to the tag's version (or
-adds the section) and makes it stand on its own. That pull request touches `xtask/**`, so it gets
-two reviews (§6). Between tags, `main`'s `VERSION` names the stage being built, with `-dev`
-(`0.4.0-dev` throughout S4), over a `## 0.4.0-dev` section that collects what has landed. The
-first pull request of new work after a tag sets it, and until it merges nothing but fixes merges,
-so a build of new work never claims a released version. **A tag is pushed by the main session, never by a
+version. It is the merge commit of a pull request that does nothing but set the version, for
+every kind of tag, a fix's included: it sets `VERSION` and the preset, and renames
+`CHANGELOG.md`'s `-dev` section to the tag's version (or adds the section) and makes it stand on
+its own. That pull request touches `xtask/**`, so it gets two reviews (§6). Between tags, `main`'s `VERSION` names the stage being built, with `-dev`
+(`0.4.0-dev` throughout S4), over a `## 0.4.0-dev` section that collects what has landed. A
+pull request that does nothing but set it merges after the tag and before any new work, so a
+build of new work never claims a released version. **A tag is pushed by the main session, never by a
 lane, and each tag needs the owner's word** (the owner approved `v0.3.0` in point 41; that every
 later tag is asked for is the main session's reading, which the owner can veto); the tag rulesets
 make a `v*` tag immutable and let only a repository admin create one (decisions-log items 119 (2)
-and 121). On a pushed `v*` tag, `.github/workflows/release.yml` checks the tag's shape
+and 121). **A pushed tag cannot be moved or deleted while those rulesets stand, so a wrong one
+spends its version number:** before pushing a tag, the main session runs the workflow's dry run
+(`workflow_dispatch` with the tag and the commit's `sha`) and pushes only after it passes. If a
+release run is refused only because the commit's push run was unfinished, or failed on something
+a re-run of its failed jobs cures, the remedy is to re-run the release run once that run is
+green; if the fault is in the tag's name or in the commit, the tag is spent and the next number
+needs the owner's word. Tagging again is never the remedy. A tag is pushed from a checkout whose
+HEAD is the tagged commit, because the pre-push hook refuses to push any ref but HEAD. On a
+pushed `v*` tag, `.github/workflows/release.yml` checks the tag's shape
 (`v<major>.<minor>.<patch>`, or the same with `-m<K>`, and no other suffix, so a `-dev` version
 can never be tagged), that its commit is on `main`, and that `ci.yml`'s push run for that exact
 commit succeeded; takes that run's two zips, with no rebuild; requires `VERSION` at that commit to
@@ -1133,10 +1157,14 @@ be the tag's own version, for every tag; takes the notes from `CHANGELOG.md`'s s
 it; and creates a draft release, a prerelease when the tag is a milestone's. The workflow publishes nothing: a draft stays unpublished
 until the owner publishes it or says otherwise, and the main session asks when it pushes the tag
 (`v0.3.0`'s draft included: the public preview is whichever version passes the fun gate). **A fix
-tag (`v0.N.P`)** is possible only while `main` holds nothing but fixes since `v0.N.0`, that is,
-until the `-dev` pull request merges, because the workflow accepts only a commit on `main`: the
-fix's own pull request sets `VERSION` to `0.N.P` and is tagged on its merge commit. Once new work
-has merged, a fix ships in the next milestone build. A release branch would change `release.yml` and is the owner's to rule
+tag (`v0.N.P`)** is possible only while `main` holds nothing but fixes and version changes since
+`v0.N.0`, because the workflow accepts only a commit on `main`. The fix merges as its own pull
+request; a version pull request then sets `VERSION` to `0.N.P` and replaces the `-dev` section,
+if there is one, with a `## 0.N.P` section that stands on its own, and is tagged on its merge
+commit; a `-dev` pull request follows the tag. Once new work has merged, a fix ships in the next
+milestone build. (This replaces item 228 (9) (g)'s "until the `-dev` pull request merges", which
+assumed that pull request carried new work: decisions-log item 230 (3); the main session's
+reading, which the owner can veto.) A release branch would change `release.yml` and is the owner's to rule
 (held). **The test tiers by tag kind**, as the owner ruled them (points 29 and 41; decisions-log
 items 227 and 228), are the rule the merge queue's pull request will implement: a stage close
 (`v0.N.0`) or a public release is "major" and gets the timed certifying runs, the fuzz and the
@@ -1182,7 +1210,8 @@ view), and is done only when all of this holds:
 The ladder, for orientation: spikes (wk 3) → walking skeleton (18.5) → S1 economy (23.5) →
 S2 destruction & combat (29.5) → S3 authoring (34.5; closed, decisions-log item 226) →
 **S4 "Signals"** (sensing, friend-or-foe, radio marks, fog, then radio warfare; was radio and
-licences), whose first half is "the three towers", the first build of rule cards (§2) → S5
+licences), whose first half is "the three towers", the first build of rule cards (§2), planned in
+`docs/design/s4-plan.md` with its design in `docs/design/holdfast.md` (decisions-log item 229) → S5
 "Commanders" → S6 "Library" → S7 "Watch and share" → hardening → **v1** (decisions-log item 227).
 The AI play harness (the owner's point 38) is built before the towers slice; it is a lane, not a
 milestone. Each stage after S4 is named only, and is detailed when the one before it closes. The

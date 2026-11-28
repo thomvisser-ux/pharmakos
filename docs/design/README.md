@@ -40,6 +40,8 @@ inventing it (`AGENTS.md` §12).
 | `s1-plan.md` | S1, the economy: the tasks, lanes, waves, re-bless ledger, P1 and the owner's decisions, all ruled (decisions-log item 128). | Closed with S1 (decisions-log item 143, 2026-10-16); its rulings stand |
 | `s2-plan.md` | S2, destruction and combat: the tasks, lanes, waves, re-bless ledger, the cut order, G3′-real and the owner's decisions (decisions-log item 144). | Closed with S2 (decisions-log item 155, 2026-10-28); its rulings stand |
 | `s3-plan.md` | S3, authoring: the tasks, lanes, waves, re-bless ledger, the cut order, G2 + P3, P1 FULL, P6 and the owner's decisions (drafted under decisions-log item 153, adopted under item 154). | Closed with S3 (decisions-log item 226, 2026-11-27); its rulings stand; the stage that follows S3 is S4 "Signals", whose first half is "the three towers" (decisions-log item 227) |
+| `s4-plan.md` | S4 "Signals", its first half, "the three towers": the order of work (the external seat and the AI play harness, the defeat rule, three slices), what each step moves, the harness's counts, point 70's value, the weak points and fallbacks; the second half named, not planned (decisions-log item 229). | Current: S4's first half's plan |
+| `holdfast.md` | The design of rotes and trust: rotes of cards, holdfast's five grades, surety, buried cable and network access control, the last Keybearer's defeat, the first round's match setting, and the direction for radio, each rule marked ruled, decided or open (decisions-log item 229). | Current: the design of record for S4; the later decision where the spec differs |
 | `targeting.md` | How a playbook names where and what: names and descriptions, the three reading rules, "nearest", sites, the S1 slice (decisions-log item 127 (12)). | Current; the later decision where the spec differs |
 | `radar-lab-research.md` | The radar lab's research memo: monostatic, Doppler, bistatic and passive, and solar-illuminated radar, with published validation cases, the lab's architecture and a phased build plan (decisions-log items 138 (4) and 140); its appendix A, a reference script kept as text, reproduces its computed values. | Current: the radar lab's plan of record; its remaining operator questions open |
 | `handoff.md` | State of the design at the end of pass 6: what was decided, what was next, working conventions, the build plan in one line. | History as of pass 6; for the plan's shape now, see decisions-log item 227 |
@@ -61,8 +63,11 @@ earlier contents carried as inputs; the fun gate moves to after the first new-co
 (decisions-log item 227). Versions are stage-based before 1.0, the minor number the stage: S3's
 build is v0.3.0, the three towers' v0.4.0-m1 and S4's close v0.4.0, and the public preview is
 whichever version passes the fun gate, the public v0.1 being retired (item 228). From S4 a
-unit's or a structure's program is authored as rule cards, which are data like playbooks; the
-first build is towers only (item 227, the owner's points 20, 28 and 36).
+unit's or a structure's program is a rote of rule cards the player can author (the rote form is
+the main session's design; the owner can veto), which are data like playbooks; the first build
+is towers only (item 227, the owner's points 20, 28 and 36). Trust in a beacon's machines is its
+holdfast, earned by the commander's hand, and beacons pass marks by buried cable before radio
+arrives in S4's second half (item 229; `holdfast.md`, `s4-plan.md`).
 
 Implementation rules — determinism, crate boundaries, contract files, security, commits, CI, the
 definition of done — are in [`../../AGENTS.md`](../../AGENTS.md), not here. Contribution mechanics
