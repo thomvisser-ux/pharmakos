@@ -5,6 +5,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # `scenarios/` — what the scenario runner asserts on
 
+**`sealed-replay` is a chain this harness did not produce** (decisions-log item
+232). It is the chain a match played through the external seat wrote to its own
+`replay/` folder, committed unchanged, and the scenario replays that match from
+both seats' sealed files. It seats no operator, so it moves with the seed, the
+committed sealed files, the rules and the sim, and not with `crates/operator`
+or `library/`. A diff there means a replay of a kept match has parted from the
+match: say which rule moved it, as for every chain here.
+
 **Filled by T11** (the first full-segment hash chain) and T15 (the runner);
 T18b added `against-easy` and T20 the demo scenario, `against-easy-three-rounds`:
 three rounds against Easy, whose 6 000-line chain pins every tick of all three

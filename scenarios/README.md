@@ -51,6 +51,36 @@ submitted it, and the chain that scenario pins was produced by a test that
 compiles a plan directly. A harness is for pinning what the sim does, including
 with orders the door would refuse; what it may not do is be quiet about it.
 
+### A `sealed` seat replays what a match sealed
+
+A match writes each seat's sealed playbook of each round to
+`seats/<seat>/sealed/<round>.jsonc` in its folder: what the seat submitted, or
+the safe playbook that was filed for it. Those files are the whole of what the
+seats put into the match, so a copy of them replays it (decisions-log item
+232). A **`sealed`** seat names a folder of them, `<round>.jsonc` for every
+round the scenario plays, counted from 1, and seals each in its round.
+
+Every file goes through `submit_plan`, the door it was sealed through, and
+**the harness door is never taken for it**: a refusal fails the run, naming the
+seat, the file and the round. A file the door took in the match and refuses in
+the replay means the replay is not that match (another seed, other rules,
+another seat's orders, or a build whose verifier reads the file differently),
+and a replay that sealed it anyway would pin a chain for a match nobody
+played. A round with no file is an invalid scenario; both readers name the
+first one missing.
+
+What a replay reproduces is the chain. The feed is not the match's line for
+line: a round whose safe playbook was filed says so in the match
+(`safe_playbook_filed`) and is a submission in the replay.
+
+To keep a match as a scenario, copy each seat's `sealed/` folder into the
+tree, name the match's seed and round limit (`match.json` in the match's
+folder holds both), state its segment length list (`segment_lengths_ms`,
+below), and commit the match's own chain, the files of its `replay/` folder
+one after the other, as the scenario's golden. `scenarios/s4/sealed-replay`
+is one: a match played through the external seat (`gamectl match`,
+docs/design/external-seat.md).
+
 ## Layout
 
 ```text
@@ -58,6 +88,7 @@ scenarios/
   README.md                        this file
   <set>/<name>.scenario.jsonc      one scenario
   <set>/<name>.playbook.jsonc      a playbook written for one scenario's map
+  <set>/<name>/seat-<n>/<round>.jsonc   what a `sealed` seat seals, round by round
   nightly/<arm>.scenario.jsonc     a nightly adversarial arm (nightly/README.md)
   nightly/seeds.txt                the seed set the nightly plays the arms over
 tests/golden/scenarios/<name>/     the hash chains and event logs it asserts on
@@ -125,8 +156,10 @@ that asserts something the build cannot do teaches the wrong thing twice over.)
 | `rules` | no | The rules table, repository-relative. Defaults to `rules/rules.v1.json` — see below. |
 | `round_limit` | no | The round the match ends on, an integer of 1 or more and never fewer than `segments`. Defaults to the sim's `DEFAULT_ROUND_LIMIT` (6, spec §3) — see below. |
 | `seats` | yes | One to three seats (spec §3), `seat` counting from 0 in array order. |
-| `seats[].kind` | yes | `playbook` (seals the named file), `safe` (files the safe playbook), `builtin` (the built-in operator, playing Easy). |
+| `segment_lengths_ms` | no | The match's segment length list, 1 to 8 lengths. Defaults to the lengths of `segments` — see below. |
+| `seats[].kind` | yes | `playbook` (seals the named file), `sealed` (seals a folder's `<round>.jsonc`, round by round), `safe` (files the safe playbook), `builtin` (the built-in operator, playing Easy). |
 | `seats[].playbook` | with `playbook` | Repository-relative path, forward slashes, no `..`. |
+| `seats[].sealed` | with `sealed` | Repository-relative path of a folder, by the same rule, holding `<round>.jsonc` for every round the file plays. |
 | `segments` | yes | One or more, `index` counting from 0. |
 | `segments[].length_ms` | yes | Game milliseconds, a positive bare integer (item 46), at most **480 000** — spec §3's "up to 8 minutes". |
 | `assertions` | yes | At least one, and see the pairing rule below. |
@@ -160,9 +193,10 @@ without saying so is the failure AGENTS.md §4.8 is about.
 
 ### The match settings
 
-One key names a match's settings beyond the triple, added in S1's first
-contract pull request (the register's S1-41), additively, under the same format
-string. Its sibling `units_per_seat`, the harness walkers each seat fielded,
+Two keys name a match's settings beyond the triple, each added additively
+under the same format string: `round_limit` in S1's first contract pull request
+(the register's S1-41), and `segment_lengths_ms` with the `sealed` seat
+(decisions-log item 232). Its sibling `units_per_seat`, the harness walkers each seat fielded,
 left the format with the walkers (the register's S2-16; S2's plan, decision
 23): G3′-real measures its load from E30's layout, never from them, so a file
 that still names the key is refused as an unknown key, and a load test lays
@@ -174,6 +208,16 @@ out its beacons and units through `Host::seed_layout` instead.
   it, and both readers refuse a limit below the file's segment count, named
   or the default, because a scenario plays no round past its limit: a file
   of seven segments has to name a limit of seven or more.
+* **`segment_lengths_ms`** — the match's segment length list, the lobby's
+  setting: round *i* takes the *i*-th length and rounds past the end take the
+  last. One to eight lengths (the sim's `MAX_SEGMENT_LENGTHS`), each a
+  segment's length by the rule below. Absent, the list is the lengths of
+  `segments`, which is what a match opened by a scenario has always been given.
+  The list is part of the match's hashed state, so a scenario that replays a
+  match played somewhere else states that match's list whole, even where the
+  file plays fewer rounds than the list has lengths: a lobby or `gamectl match`
+  match that named none took the rules table's `match.segment_lengths_ms`.
+  Both readers hold every segment to the length its round has in the list.
 
 Absent, both are what every chain committed before them was produced with, so
 adding the keys moved no chain; a scenario that names either is a claim about

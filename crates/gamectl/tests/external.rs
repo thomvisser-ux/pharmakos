@@ -16,6 +16,16 @@
 //! two (the token's limits, the audit lines, the advisor the outside seat
 //! gets, the text round trip, the saves written at every boundary) is on the
 //! gateway's side of the door, and none of it may reach the sim.
+//!
+//! # Replay
+//!
+//! And the claim that makes a match played through the door worth keeping:
+//! **its sealed files are the whole of what the seats put into it.** The
+//! same test seats both seats as the scenario format's `sealed` kind over
+//! the folders the door-played match left (`seats/<seat>/sealed/`), each
+//! round's file through `submit_plan` again, and holds that match to the
+//! same chain (decisions-log item 232). So a match a program found from
+//! outside is committed as a scenario by copying two folders.
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -131,6 +141,7 @@ fn easy_through_the_external_door_plays_the_match_easy_plays_in_process() {
         generator: String::from("v1"),
         rules: String::from("rules/rules.v1.json"),
         round_limit: PARITY_ROUNDS,
+        ladder: None,
         seats: vec![
             Seat {
                 seat: 0,
@@ -182,6 +193,26 @@ fn easy_through_the_external_door_plays_the_match_easy_plays_in_process() {
                 .lines()
                 .zip(in_process.chain.lines())
                 .position(|(door, process)| door != process)
+        );
+
+        // From its sealed files: what the outside seat submitted and what the
+        // built-in seat did, each round's file through `submit_plan` again,
+        // with no operator seated at all.
+        let replay = sealed_replay_of(&dir);
+        let (replayed, replayed_ending) =
+            scenario::run::play_to_end(&root, &replay).expect("the sealed files replay");
+        assert_eq!(
+            replayed_ending, ending,
+            "{name}: the replay from sealed files ended another way"
+        );
+        assert!(
+            replayed.chain == in_process.chain,
+            "{name}: the replay from sealed files parts from the match at line {:?}",
+            replayed
+                .chain
+                .lines()
+                .zip(in_process.chain.lines())
+                .position(|(replay, process)| replay != process)
         );
     }
 }
@@ -300,6 +331,134 @@ fn play_through_the_door(
         );
     }
     (chain, rounds)
+}
+
+/// The parity match as a scenario whose seats replay the sealed files the
+/// door-played match in `dir` left.
+fn sealed_replay_of(dir: &Path) -> Scenario {
+    let sealed = |seat: u8| Seat {
+        seat,
+        kind: SeatKind::Sealed(
+            dir.join("matches")
+                .join(MATCH_ID)
+                .join("seats")
+                .join(seat.to_string())
+                .join("sealed")
+                .display()
+                .to_string(),
+        ),
+    };
+    Scenario {
+        source: String::from("<sealed replay>"),
+        name: String::from("sealed-replay"),
+        summary: String::new(),
+        seed: PARITY_SEED,
+        generator: String::from("v1"),
+        rules: String::from("rules/rules.v1.json"),
+        round_limit: PARITY_ROUNDS,
+        ladder: None,
+        seats: vec![sealed(0), sealed(1)],
+        segments: PARITY_SEGMENTS_MS
+            .into_iter()
+            .enumerate()
+            .map(|(index, length_ms)| Segment { index, length_ms })
+            .collect(),
+        assertions: vec![Assertion::EventFired {
+            event: String::from("segment_ended"),
+            seat: None,
+            by_tick: u32::MAX,
+        }],
+        nightly: true,
+    }
+}
+
+/// The parity match with an outside seat that never seals: it says ready
+/// with nothing submitted, every round, so the gateway files its safe
+/// playbook. Gives back the match's chain and its rounds.
+fn play_unsealed_through_the_door(root: &Path, rules_json: &str, dir: &Path) -> (String, u32) {
+    let mut door = open_door(root, rules_json, dir, false);
+    let mut rounds = 0_u32;
+    while !door.ended() {
+        rounds += 1;
+        assert!(
+            rounds <= PARITY_ROUNDS,
+            "the match played past its round limit"
+        );
+        let answer =
+            door.call_bytes(br#"{"jsonrpc":"2.0","id":1,"method":"set_ready","params":{}}"#);
+        assert!(
+            answer.get("error").is_none(),
+            "ready was refused: {answer:?}"
+        );
+        door.advance().expect("the round plays");
+    }
+    door.close().expect("the match is put down");
+    let mut chain = String::new();
+    for round in 1..=rounds {
+        chain.push_str(
+            &std::fs::read_to_string(
+                dir.join("matches")
+                    .join(MATCH_ID)
+                    .join("replay")
+                    .join(format!("{round}.hashes.txt")),
+            )
+            .expect("the round's chain"),
+        );
+    }
+    (chain, rounds)
+}
+
+/// A round a seat sealed nothing in is replayed too: the safe playbook the
+/// gateway filed for it is the round's sealed file like any other, and it
+/// goes through `submit_plan` in the replay to the same match. And a sealed
+/// file that is not the one the match sealed is a failed run that names the
+/// seat, the file and the round, never a seal through the harness's door.
+#[test]
+fn a_round_nobody_sealed_replays_and_a_file_the_door_refuses_fails_the_run() {
+    let root = root();
+    let rules_path = root.join("rules").join("rules.v1.json");
+    let rules = pharmakos_sim::rules::RulesTable::load(&rules_path).expect("the shipped rules");
+    let rules_json = rules.canonical_json().to_owned();
+
+    let dir = fresh_dir("unsealed");
+    let (chain, rounds) = play_unsealed_through_the_door(&root, &rules_json, &dir);
+    let replay = sealed_replay_of(&dir);
+    let (replayed, ending) =
+        scenario::run::play_to_end(&root, &replay).expect("the filed playbooks replay");
+    assert_eq!(ending.rounds, rounds);
+    assert!(
+        replayed.chain == chain,
+        "the replay parts from the match at line {:?}",
+        replayed
+            .chain
+            .lines()
+            .zip(chain.lines())
+            .position(|(replay, played)| replay != played)
+    );
+
+    // Seat 0's second round is no playbook at all.
+    let Some(SeatKind::Sealed(folder)) = replay.seats.first().map(|seat| &seat.kind) else {
+        panic!("seat 0 is sealed");
+    };
+    std::fs::write(
+        Path::new(folder).join("2.jsonc"),
+        "{ \"format\": \"nothing\" }\n",
+    )
+    .expect("the doctored file");
+    let failure = scenario::run::play_to_end(&root, &replay).expect_err("the door refuses it");
+    assert_eq!(failure.code, Exit::Failed, "{}", failure.message);
+    for wanted in ["seat 0's sealed playbook", "2.jsonc", "in round 2"] {
+        assert!(
+            failure.message.contains(wanted),
+            "no `{wanted}` in: {}",
+            failure.message
+        );
+    }
+
+    // And a round with no file is an input the scenario names and lacks.
+    std::fs::remove_file(Path::new(folder).join("2.jsonc")).expect("the file goes");
+    let failure = scenario::run::play_to_end(&root, &replay).expect_err("no file to seal");
+    assert_eq!(failure.code, Exit::Input, "{}", failure.message);
 }
 
 // ---------------------------------------------------------------------------

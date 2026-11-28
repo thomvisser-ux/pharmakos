@@ -118,6 +118,7 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "map",
     "rules",
     "round_limit",
+    "segment_lengths_ms",
     "seats",
     "segments",
     "assertions",
@@ -130,7 +131,7 @@ const MAP_KEYS: &[&str] = &["seed", "generator"];
 /// `xtask/src/scenario.rs`'s `MAX_SEGMENT_MS` holds the same number, so the two
 /// readers refuse the same files.
 pub const MAX_SEGMENT_MS: i32 = 480_000;
-const SEAT_KEYS: &[&str] = &["seat", "kind", "playbook"];
+const SEAT_KEYS: &[&str] = &["seat", "kind", "playbook", "sealed"];
 const SEGMENT_KEYS: &[&str] = &["index", "length_ms", "note"];
 const EVENT_FIRED_KEYS: &[&str] = &["assert", "event", "seat", "by_tick", "note"];
 const HASH_CHAIN_KEYS: &[&str] = &["assert", "golden", "note"];
@@ -143,6 +144,15 @@ const MAX_SEATS: usize = 3;
 pub enum SeatKind {
     /// It seals the named file, as a path from the repository root.
     Playbook(String),
+    /// It seals what a match sealed, round by round: the named folder, as a
+    /// path from the repository root, holds `<round>.jsonc` for every round
+    /// the scenario plays, the names and the bytes a match's own
+    /// `seats/<seat>/sealed/` folder holds ([`sealed_file`]). Each goes
+    /// through `submit_plan`, the door it was sealed through, and a refusal
+    /// fails the run: the harness door is never taken for it, because a
+    /// replay that seals what no seat could have submitted replays nothing
+    /// (decisions-log item 232).
+    Sealed(String),
     /// It seals nothing, so the gateway files a safe playbook for it at the
     /// end of the Lull (spec §14). A scenario run advises no seat, so what is
     /// filed is the gateway's fallback — the library's Safe Playbook with
@@ -218,6 +228,15 @@ pub struct Scenario {
     /// The round the match ends on: the `round_limit` key, or the sim's
     /// `DEFAULT_ROUND_LIMIT`. Never fewer than the segments.
     pub round_limit: u32,
+    /// The match's segment length list, the lobby's setting
+    /// (`MatchSettings::segment_lengths_ms`): the `segment_lengths_ms` key,
+    /// or `None` for a file that names none, whose match takes the lengths
+    /// of its own segments, as every match did before the key existed. The
+    /// list is hashed with the match, so a file that replays a match played
+    /// somewhere else (a `sealed` seat's) states that match's list, which may
+    /// be longer than the rounds the file plays. Every segment's length is
+    /// its round's in this list ([`length_for_round`]).
+    pub ladder: Option<Vec<i32>>,
     /// One to three seats, in seat order.
     pub seats: Vec<Seat>,
     /// One or more segments, in order.
@@ -230,6 +249,18 @@ pub struct Scenario {
 }
 
 impl Scenario {
+    /// The segment length list the match is opened with: the file's own, or
+    /// the lengths of its segments.
+    #[must_use]
+    pub fn segment_lengths_ms(&self) -> Vec<i32> {
+        self.ladder.clone().unwrap_or_else(|| {
+            self.segments
+                .iter()
+                .map(|segment| segment.length_ms)
+                .collect()
+        })
+    }
+
     /// How many ticks the whole scenario plays, at 20 Hz.
     ///
     /// # Errors
@@ -259,6 +290,14 @@ impl Scenario {
 #[must_use]
 pub fn ticks_of(length_ms: i32) -> u32 {
     pharmakos_sim::math::quantity::Ms::new(length_ms).to_ticks_floor()
+}
+
+/// The file a `sealed` seat seals in `round` (counted from 1), as a path from
+/// the repository root: `<folder>/<round>.jsonc`, the name the gateway's
+/// match cache gives a seat's sealed playbook of that round.
+#[must_use]
+pub fn sealed_file(folder: &str, round: u32) -> String {
+    format!("{folder}/{round}.jsonc")
 }
 
 /// One problem with one place in the file.
@@ -421,7 +460,9 @@ fn read(
         check_arm_seats(&seats, problems);
     }
     let segments = read_segments(json, problems);
+    check_sealed_rounds(root, &seats, segments.len(), problems);
     let round_limit = read_match_settings(json, segments.len(), problems);
+    let ladder = read_ladder(json, &segments, problems);
     let assertions = read_assertions(root, json, nightly, problems);
 
     Some(Scenario {
@@ -432,11 +473,80 @@ fn read(
         generator: generator?,
         rules,
         round_limit,
+        ladder,
         seats,
         segments,
         assertions,
         nightly,
     })
+}
+
+/// The length round `index + 1` plays under a segment length list: its own
+/// entry, and past the end the last one, the sim's rule
+/// (`MatchSettings::segment_lengths_ms`). `None` for an empty list.
+#[must_use]
+pub fn length_for_round(ladder: &[i32], index: usize) -> Option<i32> {
+    ladder.get(index).or(ladder.last()).copied()
+}
+
+/// The optional `segment_lengths_ms` key: one to
+/// [`pharmakos_sim::rules::MAX_SEGMENT_LENGTHS`] lengths, each a segment's
+/// length by the rule a segment's own is held to, and every segment the file
+/// plays the length its round takes from the list.
+fn read_ladder(json: &Json, segments: &[Segment], problems: &mut Problems) -> Option<Vec<i32>> {
+    let value = json.get("segment_lengths_ms")?;
+    let most = pharmakos_sim::rules::MAX_SEGMENT_LENGTHS;
+    let Json::Array(entries) = value else {
+        problems.at(
+            "/segment_lengths_ms",
+            format!(
+                "optional, but when present it is the match's segment length list: an array of \
+                 1 to {most} lengths in game milliseconds"
+            ),
+        );
+        return None;
+    };
+    if entries.is_empty() || entries.len() > most {
+        problems.at(
+            "/segment_lengths_ms",
+            format!(
+                "a match's segment length list holds 1 to {most} lengths; this one holds {}",
+                entries.len()
+            ),
+        );
+        return None;
+    }
+    let mut ladder: Vec<i32> = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        match integer_as::<i32>(Some(entry)) {
+            Some(Ok(length)) if length > 0 && length <= MAX_SEGMENT_MS => ladder.push(length),
+            _ => problems.at(
+                &format!("/segment_lengths_ms/{index}"),
+                format!(
+                    "a segment length is a positive count of game milliseconds, at most \
+                     {MAX_SEGMENT_MS}, spec §3's eight minutes"
+                ),
+            ),
+        }
+    }
+    if ladder.len() != entries.len() {
+        return None;
+    }
+    for segment in segments {
+        let wanted = length_for_round(&ladder, segment.index);
+        if wanted != Some(segment.length_ms) {
+            problems.at(
+                &format!("/segments/{}/length_ms", segment.index),
+                format!(
+                    "`segment_lengths_ms` gives this round {} game milliseconds, and the segment \
+                     says {}; a segment plays the length its round has in the match",
+                    wanted.map_or_else(|| String::from("no"), |length| length.to_string()),
+                    segment.length_ms
+                ),
+            );
+        }
+    }
+    Some(ladder)
 }
 
 /// A nightly arm seats one `playbook` seat and one `builtin` seat, in either
@@ -457,6 +567,37 @@ fn check_arm_seats(seats: &[Seat], problems: &mut Problems) {
              `builtin` seat, Easy, which a run over a seed file alternates between seat 0 and \
              seat 1 (S2's plan, decision 29)",
         );
+    }
+}
+
+/// A `sealed` seat's folder holds a file for every round the scenario plays.
+///
+/// The first round without one is named, once a seat: the format does not cap
+/// how many segments a file lists, and one line says what is missing as well
+/// as a thousand do.
+fn check_sealed_rounds(root: &Path, seats: &[Seat], segments: usize, problems: &mut Problems) {
+    for seat in seats {
+        let SeatKind::Sealed(folder) = &seat.kind else {
+            continue;
+        };
+        if !root.join(folder).is_dir() {
+            // Already said, at the same pointer, by `read_seats`.
+            continue;
+        }
+        let missing = (1..=segments)
+            .filter_map(|round| u32::try_from(round).ok())
+            .map(|round| (round, sealed_file(folder, round)))
+            .find(|(_, file)| !root.join(file).is_file());
+        if let Some((round, file)) = missing {
+            problems.at(
+                &format!("/seats/{}/sealed", seat.seat),
+                format!(
+                    "`{}` is not a file in this repository: a `sealed` seat seals \
+                     `<round>.jsonc` in every round, and this scenario plays round {round}",
+                    pharmakos_proto::json::grammar::escaped(&file)
+                ),
+            );
+        }
     }
 }
 
@@ -556,52 +697,8 @@ fn read_seats(root: &Path, json: &Json, problems: &mut Problems) -> Vec<Seat> {
             None => problems.at(&format!("{base}/seat"), "required: the seat id, an integer"),
         }
 
-        let Some(Json::String(kind)) = seat.get("kind") else {
-            problems.at(
-                &format!("{base}/kind"),
-                "must be one of playbook, safe, builtin",
-            );
+        let Some(kind) = read_kind(root, &base, seat, problems) else {
             continue;
-        };
-        let kind = match kind.as_str() {
-            "playbook" => {
-                let Some(Json::String(relative)) = seat.get("playbook") else {
-                    problems.at(
-                        &format!("{base}/playbook"),
-                        "a `playbook` seat names the playbook it seals, as a path from the \
-                         repository root",
-                    );
-                    continue;
-                };
-                check_path(root, &format!("{base}/playbook"), relative, true, problems);
-                SeatKind::Playbook(relative.clone())
-            }
-            other @ ("safe" | "builtin") => {
-                if seat.get("playbook").is_some() {
-                    problems.at(
-                        &format!("{base}/playbook"),
-                        format!(
-                            "a `{}` seat does not seal a file, so it takes no `playbook`",
-                            pharmakos_proto::json::grammar::escaped(other)
-                        ),
-                    );
-                }
-                if other == "safe" {
-                    SeatKind::Safe
-                } else {
-                    SeatKind::Builtin
-                }
-            }
-            other => {
-                problems.at(
-                    &format!("{base}/kind"),
-                    format!(
-                        "`{}` must be one of playbook, safe, builtin",
-                        pharmakos_proto::json::grammar::escaped(other)
-                    ),
-                );
-                continue;
-            }
         };
         // A file of more seats than a `u8` numbers has already been told it
         // has too many; the seat past the range is not read at all rather
@@ -612,6 +709,74 @@ fn read_seats(root: &Path, json: &Json, problems: &mut Problems) -> Vec<Seat> {
         read.push(Seat { seat, kind });
     }
     read
+}
+
+/// What the seat at `base` plays, or `None` with the problem said.
+fn read_kind(root: &Path, base: &str, seat: &Json, problems: &mut Problems) -> Option<SeatKind> {
+    const KINDS: &[&str] = &["playbook", "sealed", "safe", "builtin"];
+    let kind = match seat.get("kind") {
+        Some(Json::String(kind)) if KINDS.contains(&kind.as_str()) => kind.as_str(),
+        Some(Json::String(other)) => {
+            problems.at(
+                &format!("{base}/kind"),
+                format!(
+                    "`{}` must be one of playbook, sealed, safe, builtin",
+                    pharmakos_proto::json::grammar::escaped(other)
+                ),
+            );
+            return None;
+        }
+        _ => {
+            problems.at(
+                &format!("{base}/kind"),
+                "must be one of playbook, sealed, safe, builtin",
+            );
+            return None;
+        }
+    };
+    // The key that names what a kind seals belongs to that kind alone.
+    for key in ["playbook", "sealed"] {
+        if kind == key || seat.get(key).is_none() {
+            continue;
+        }
+        let why = match kind {
+            "playbook" => "seals the one file its `playbook` names",
+            "sealed" => "seals the files in the folder its `sealed` names",
+            _ => "does not seal a file",
+        };
+        problems.at(
+            &format!("{base}/{key}"),
+            format!("a `{kind}` seat {why}, so it takes no `{key}`"),
+        );
+    }
+    match kind {
+        "sealed" => {
+            let Some(Json::String(relative)) = seat.get("sealed") else {
+                problems.at(
+                    &format!("{base}/sealed"),
+                    "a `sealed` seat names the folder of playbooks a match sealed, \
+                     `<round>.jsonc` for each round, as a path from the repository root",
+                );
+                return None;
+            };
+            check_folder(root, &format!("{base}/sealed"), relative, problems);
+            Some(SeatKind::Sealed(relative.clone()))
+        }
+        "playbook" => {
+            let Some(Json::String(relative)) = seat.get("playbook") else {
+                problems.at(
+                    &format!("{base}/playbook"),
+                    "a `playbook` seat names the playbook it seals, as a path from the \
+                     repository root",
+                );
+                return None;
+            };
+            check_path(root, &format!("{base}/playbook"), relative, true, problems);
+            Some(SeatKind::Playbook(relative.clone()))
+        }
+        "safe" => Some(SeatKind::Safe),
+        _ => Some(SeatKind::Builtin),
+    }
 }
 
 fn read_segments(json: &Json, problems: &mut Problems) -> Vec<Segment> {
@@ -998,14 +1163,7 @@ fn check_path(
     must_exist: bool,
     problems: &mut Problems,
 ) {
-    let bad = relative.is_empty()
-        || relative.contains('\\')
-        || relative.starts_with('/')
-        || relative.split('/').any(|part| part == ".." || part.is_empty())
-        // A Windows drive letter is an absolute path that does not start with
-        // a slash, so the check above does not see it.
-        || relative.as_bytes().get(1) == Some(&b':');
-    if bad {
+    if leaves_the_repository(relative) {
         problems.at(pointer, strings::path_escapes(relative));
         return;
     }
@@ -1014,6 +1172,35 @@ fn check_path(
             pointer,
             format!(
                 "`{}` is not a file in this repository",
+                pharmakos_proto::json::grammar::escaped(relative)
+            ),
+        );
+    }
+}
+
+/// Whether `relative` is anything but a path from the repository root that
+/// stays inside it.
+fn leaves_the_repository(relative: &str) -> bool {
+    relative.is_empty()
+        || relative.contains('\\')
+        || relative.starts_with('/')
+        || relative.split('/').any(|part| part == ".." || part.is_empty())
+        // A Windows drive letter is an absolute path that does not start with
+        // a slash, so the check above does not see it.
+        || relative.as_bytes().get(1) == Some(&b':')
+}
+
+/// [`check_path`] for a folder that must exist.
+fn check_folder(root: &Path, pointer: &str, relative: &str, problems: &mut Problems) {
+    if leaves_the_repository(relative) {
+        problems.at(pointer, strings::path_escapes(relative));
+        return;
+    }
+    if !root.join(relative).is_dir() {
+        problems.at(
+            pointer,
+            format!(
+                "`{}` is not a folder in this repository",
                 pharmakos_proto::json::grammar::escaped(relative)
             ),
         );

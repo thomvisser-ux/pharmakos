@@ -1121,6 +1121,21 @@ pub fn nightly_arm_refused(seat: u8, path: &str, round: u32, codes: &str) -> Str
     )
 }
 
+/// A `sealed` seat's file that `submit_plan` refused. A `sealed` seat
+/// replays what a match sealed through the door it was sealed through, so the
+/// harness door is not taken.
+#[must_use]
+pub fn sealed_replay_refused(seat: u8, path: &str, round: u32, codes: &str) -> String {
+    let path = pharmakos_proto::json::grammar::escaped(path);
+    format!(
+        "seat {seat}'s sealed playbook `{path}` was refused by `submit_plan` in round {round} \
+         ({codes}). A `sealed` seat replays what a match sealed, through the door it was sealed \
+         through and never the harness's, so this is not the match those files came from: the \
+         map seed, the rules, the other seats or this build differ from the ones it was played \
+         with."
+    )
+}
+
 /// A scenario run over a seed file that does not seat one `playbook` seat
 /// and one `builtin` seat.
 #[must_use]
