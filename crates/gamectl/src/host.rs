@@ -522,32 +522,7 @@ pub fn run(root: &Path) -> Result<String, Failure> {
     if std::io::stdout().is_terminal() {
         return Err(Failure::usage(strings::host_on_a_terminal()));
     }
-    let path = root.join(rules::RULES_PATH);
-    let rules_json = std::fs::read_to_string(&path).map_err(|error| {
-        Failure::input(strings::unreadable(
-            "rules table",
-            &crate::display(&path),
-            &error.to_string(),
-        ))
-    })?;
-    let operators = EasyOperators::new(&rules_json).map_err(|error| {
-        Failure::input(strings::unreadable(
-            "rules table",
-            &crate::display(&path),
-            &error.to_string(),
-        ))
-    })?;
-    let unsaid = operators.unsaid();
-    let setup = Setup {
-        rules_json,
-        // A path, not a check: the gateway reads the folder on every
-        // `list_templates` and says so when it cannot, and a checkout always
-        // has one.
-        library: Some(root.join(LIBRARY_PATH)),
-        // Easy for every seat: it plays the seats nobody at this machine
-        // plays and advises the human's (T18).
-        operators: Box::new(operators),
-    };
+    let (setup, unsaid) = setup(root)?;
     let announced = std::cell::Cell::new(false);
     let served = serve::run(
         setup,
@@ -578,6 +553,46 @@ pub fn run(root: &Path) -> Result<String, Failure> {
     // Nothing more goes to standard output: the announce line was the whole of
     // what this command writes there.
     Ok(String::new())
+}
+
+/// What every host this binary runs hands the gateway: the rules table's
+/// text, the template library's folder and Easy for every seat, with the
+/// count of lines Easy's seats could not write. One function for `host` and
+/// for the external seat's commands ([`crate::external`]), so the two hosts
+/// seat the same operator over the same files.
+///
+/// # Errors
+///
+/// [`crate::exit::Exit::Input`] for a rules table that cannot be read, or
+/// that Easy cannot score with.
+pub fn setup(root: &Path) -> Result<(Setup, std::sync::Arc<Unsaid>), Failure> {
+    let path = root.join(rules::RULES_PATH);
+    let rules_json = std::fs::read_to_string(&path).map_err(|error| {
+        Failure::input(strings::unreadable(
+            "rules table",
+            &crate::display(&path),
+            &error.to_string(),
+        ))
+    })?;
+    let operators = EasyOperators::new(&rules_json).map_err(|error| {
+        Failure::input(strings::unreadable(
+            "rules table",
+            &crate::display(&path),
+            &error.to_string(),
+        ))
+    })?;
+    let unsaid = operators.unsaid();
+    let setup = Setup {
+        rules_json,
+        // A path, not a check: the gateway reads the folder on every
+        // `list_templates` and says so when it cannot, and a checkout always
+        // has one.
+        library: Some(root.join(LIBRARY_PATH)),
+        // Easy for every seat: it plays the seats nobody at this machine
+        // plays and advises the human's (T18).
+        operators: Box::new(operators),
+    };
+    Ok((setup, unsaid))
 }
 
 /// Standard output, recording whether anything was written to it: the

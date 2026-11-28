@@ -41,6 +41,7 @@ inventing it (`AGENTS.md` §12).
 | `s2-plan.md` | S2, destruction and combat: the tasks, lanes, waves, re-bless ledger, the cut order, G3′-real and the owner's decisions (decisions-log item 144). | Closed with S2 (decisions-log item 155, 2026-10-28); its rulings stand |
 | `s3-plan.md` | S3, authoring: the tasks, lanes, waves, re-bless ledger, the cut order, G2 + P3, P1 FULL, P6 and the owner's decisions (drafted under decisions-log item 153, adopted under item 154). | Closed with S3 (decisions-log item 226, 2026-11-27); its rulings stand; the stage that follows S3 is S4 "Signals", whose first half is "the three towers" (decisions-log item 227) |
 | `s4-plan.md` | S4 "Signals", its first half, "the three towers": the order of work (the external seat and the AI play harness, the defeat rule, three slices), what each step moves, the harness's counts, point 70's value, the weak points and fallbacks; the second half named, not planned (decisions-log item 229). | Current: S4's first half's plan |
+| `external-seat.md` | The experimental external seat as it stands: one seat of a headless match played by a program outside the game through `gamectl match` (what the seat is, the commands, the bridge, exit codes, what a player that cannot see still lacks). Its decision is decisions-log item 231. |
 | `holdfast.md` | The design of rotes and trust: rotes of cards, holdfast's five grades, surety, buried cable and network access control, the last Keybearer's defeat, the first round's match setting, and the direction for radio, each rule marked ruled, decided or open (decisions-log item 229). | Current: the design of record for S4; the later decision where the spec differs |
 | `targeting.md` | How a playbook names where and what: names and descriptions, the three reading rules, "nearest", sites, the S1 slice (decisions-log item 127 (12)). | Current; the later decision where the spec differs |
 | `radar-lab-research.md` | The radar lab's research memo: monostatic, Doppler, bistatic and passive, and solar-illuminated radar, with published validation cases, the lab's architecture and a phased build plan (decisions-log items 138 (4) and 140); its appendix A, a reference script kept as text, reproduces its computed values. | Current: the radar lab's plan of record; its remaining operator questions open |
@@ -54,7 +55,8 @@ inventing it (`AGENTS.md` §12).
 v1: everything that executes is Rust — the commander's **operator**, the beacons' **mandates**, the
 units' and buildings' **programs**. Everything the player touches is data: **playbooks** and
 templates as JSONC (canonical `gp.v1` proto JSON plus comments). No script runtime, no MCP, no SDK,
-no published API, no AI seats, no manual control. The Seat Gateway is internal but agent-shaped;
+no published API, no AI inside the game (a local program may play the experimental external seat
+of a headless match, `external-seat.md`), no manual control. The Seat Gateway is internal but agent-shaped;
 script seams are reserved in the proto and never read. The sim is deterministic at 20 Hz on integer
 maths, hashed every tick. Build plan: through S3 as the spec's weeks; after S3, S4 "Signals",
 whose first half is "the three towers", then S5 "Commanders", S6 "Library", S7 "Watch and

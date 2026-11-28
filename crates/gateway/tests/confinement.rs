@@ -57,6 +57,17 @@
 //!    admin-scoped methods, and the scope is read off the descriptor set
 //!    rather than off this file.
 //!
+//!    **The external seat adds one more place, and no more reach**
+//!    (decisions-log item 231). Its host mints no admin token, so no method
+//!    moves its match and the host must: `src/headless.rs` holds the three
+//!    boundary crossings, on the control module's terms exactly (the three
+//!    driving methods, nothing else on the list, none of the banned names).
+//!    It is no handler, so what holds it is who may call it:
+//!    [`the_headless_driver_is_the_external_hosts_alone`] keeps its three
+//!    functions to `src/serve.rs`, once each, so the stepping list cannot be
+//!    walked round by a name it does not know, and holds the driver to a
+//!    list of powers it may not grow into (a token, a clock, a save seam).
+//!
 //! 7. **No wire method files a voxel edit or a damage order.**
 //!    [`no_wire_method_files_a_voxel_edit_or_a_damage_order`]. `Host` gained
 //!    two public mutators at T16a as a **test seam** -- nothing on `main`
@@ -337,7 +348,75 @@ const CONTROL_MODULE: &str = "control.rs";
 /// driving methods, and those alone.
 const CONTROL_MAY_DRIVE: &[&str] = &[".step(", "begin_push", "end_recap"];
 
-/// What [`CONTROL_MODULE`] may never name.
+/// The headless host's driver (decisions-log item 231): the one module that
+/// is no handler and may drive the live match, on [`CONTROL_MODULE`]'s terms.
+///
+/// Matched by its path under the crate, so a `headless.rs` added in a handler
+/// directory is scanned like any other file.
+const HEADLESS_MODULE: &str = "src/headless.rs";
+
+/// The driver's three crossings: what a caller names to move a match with no
+/// admin token. Each may be named in [`HEADLESS_MODULE`] and, once, in
+/// [`HEADLESS_CALLER`].
+const HEADLESS_CROSSINGS: &[(&str, &str)] = &[
+    (
+        "leave_lull",
+        "the headless driver's Lull crossing: a handler that could name it could seal every \
+         seat's orders and begin a Push",
+    ),
+    (
+        "play_push",
+        "the headless driver's Push: a handler that could name it could step the match",
+    ),
+    (
+        "leave_recap",
+        "the headless driver's recap crossing: a handler that could name it could open the next \
+         Lull",
+    ),
+];
+
+/// The one file that may call [`HEADLESS_CROSSINGS`]: the host loop, where
+/// the external seat's host lives.
+const HEADLESS_CALLER: &str = "src/serve.rs";
+
+/// What [`HEADLESS_MODULE`] may never name, beyond [`CONTROL_BANNED`]: the
+/// powers a host has and a driver of three crossings does not need. The
+/// stepping list and the control handlers' bans are about reaching inside the
+/// match; these are about what a module that moves a match with no admin
+/// token could otherwise grow into.
+const HEADLESS_BANNED: &[(&str, &str)] = &[
+    (
+        "tokens",
+        "the driver holds no token and mints none: the external seat's host mints one seat's \
+         token, in the host loop, and no token that could move a match exists on this path",
+    ),
+    (".mint(", "the same rule, by the call"),
+    (
+        "set_phase_remaining_ms",
+        "a headless Lull is untimed: the driver gives the gateway no clock",
+    ),
+    (
+        "report_host_clock",
+        "a headless Lull is untimed: the driver reports no clock",
+    ),
+    (
+        "register_in_process",
+        "giving a token a rate is the host loop's (rule 8)",
+    ),
+    ("file_advice", "filing advice is the host loop's (rule 8)"),
+    (
+        "seal_by_harness",
+        "the scenario harness's door is the scenario runner's alone",
+    ),
+    (
+        "lull_save",
+        "the save seams are the host loop's: the driver crosses a boundary and the host loop \
+         writes it",
+    ),
+    ("take_persistence", "the save seams are the host loop's"),
+];
+
+/// What [`CONTROL_MODULE`] and [`HEADLESS_MODULE`] may never name.
 ///
 /// The exemption above is "drive the live match", not "reach into it". A
 /// control handler that could name a `Runner`, a `World` or `host_mut` could
@@ -1565,13 +1644,42 @@ fn no_research_build_is_named_anywhere_in_the_crate() {
     );
 }
 
-/// The match is built and stepped in `host.rs`, driven from `surface.rs` and
-/// from `surface/control.rs`, and named nowhere else.
+/// What a module exempted to drive the live match names beyond its
+/// exemption: anything on [`STEPPING`] but [`CONTROL_MAY_DRIVE`], and anything
+/// on [`CONTROL_BANNED`]. One scan for the control handlers and the headless
+/// driver, so the two are held to the same terms by construction.
+fn driver_overreach(module: &str, lines: &[(usize, String)]) -> Vec<String> {
+    let mut overreach: Vec<String> = Vec::new();
+    for (number, line) in lines {
+        for (needle, _) in STEPPING {
+            if uses(line, needle) && !CONTROL_MAY_DRIVE.contains(needle) {
+                overreach.push(format!(
+                    "{module}:{number}: `{needle}`\n    {}",
+                    line.trim()
+                ));
+            }
+        }
+        for (needle, why) in CONTROL_BANNED {
+            if uses(line, needle) {
+                overreach.push(format!(
+                    "{module}:{number}: `{needle}` -- {why}\n    {}",
+                    line.trim()
+                ));
+            }
+        }
+    }
+    overreach
+}
+
+/// The match is built and stepped in `host.rs`, driven from `surface.rs`,
+/// from `surface/control.rs` and from `headless.rs`, and named nowhere else.
 ///
-/// Four assertions, and the rule they hold is the one T16a changed -- see the
-/// module docs, rule 6.
+/// Four assertions, and the rule they hold is the one T16a changed and the
+/// external seat added a place to -- see the module docs, rule 6. The third
+/// and the fourth are made of the headless driver too, on the control
+/// module's terms.
 ///
-/// * **Nothing outside those three names a stepping call at all**, so a read
+/// * **Nothing outside those four names a stepping call at all**, so a read
 ///   handler cannot answer "what would happen" by making it happen.
 /// * **`surface.rs` reaches the runner only through `host_mut()`**, so there
 ///   is no second path to it in the file that drives it.
@@ -1583,10 +1691,19 @@ fn no_research_build_is_named_anywhere_in_the_crate() {
 ///   an empty room is a rule that has quietly stopped applying.
 #[test]
 fn the_match_is_stepped_in_one_module() {
-    let findings = scan_except(STEPPING, &[HOST_MODULE, HOST_DRIVER_MODULE, CONTROL_MODULE]);
+    let findings = scan_except(
+        STEPPING,
+        &[
+            HOST_MODULE,
+            HOST_DRIVER_MODULE,
+            CONTROL_MODULE,
+            HEADLESS_MODULE,
+        ],
+    );
     assert!(
         findings.is_empty(),
-        "the match is stepped outside {HOST_MODULE}, {HOST_DRIVER_MODULE} and {CONTROL_MODULE}:\n{}",
+        "the match is stepped outside {HOST_MODULE}, {HOST_DRIVER_MODULE}, {CONTROL_MODULE} and \
+         {HEADLESS_MODULE}:\n{}",
         findings.join("\n")
     );
 
@@ -1624,28 +1741,27 @@ fn the_match_is_stepped_in_one_module() {
         "{CONTROL_MODULE} read as {} lines of code; the scan is looking at the wrong file",
         control_lines.len()
     );
-    let mut overreach: Vec<String> = Vec::new();
-    for (number, line) in &control_lines {
-        for (needle, _) in STEPPING {
-            if uses(line, needle) && !CONTROL_MAY_DRIVE.contains(needle) {
-                overreach.push(format!(
-                    "{CONTROL_MODULE}:{number}: `{needle}`\n    {}",
-                    line.trim()
-                ));
-            }
-        }
-        for (needle, why) in CONTROL_BANNED {
-            if uses(line, needle) {
-                overreach.push(format!(
-                    "{CONTROL_MODULE}:{number}: `{needle}` -- {why}\n    {}",
-                    line.trim()
-                ));
-            }
-        }
-    }
+    let overreach = driver_overreach(CONTROL_MODULE, &control_lines);
     assert!(
         overreach.is_empty(),
         "a control handler reaches past the three driving methods:\n{}",
+        overreach.join("\n")
+    );
+
+    // The headless driver: the same three, and the same nothing else.
+    let headless = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(HEADLESS_MODULE);
+    let headless_text =
+        std::fs::read_to_string(&headless).expect("the headless driver is where it lives");
+    let headless_lines = code_lines(&headless_text);
+    assert!(
+        headless_lines.len() > 30,
+        "{HEADLESS_MODULE} read as {} lines of code; the scan is looking at the wrong file",
+        headless_lines.len()
+    );
+    let overreach = driver_overreach(HEADLESS_MODULE, &headless_lines);
+    assert!(
+        overreach.is_empty(),
+        "the headless driver reaches past the three driving methods:\n{}",
         overreach.join("\n")
     );
 
@@ -1666,7 +1782,95 @@ fn the_match_is_stepped_in_one_module() {
             "`{needle}` is what {CONTROL_MODULE} is exempted for and it does not do it, so the \
              exemption is guarding nothing"
         );
+        assert!(
+            headless_lines.iter().any(|(_, line)| uses(line, needle)),
+            "`{needle}` is what {HEADLESS_MODULE} is exempted for and it does not do it, so the \
+             exemption is guarding nothing"
+        );
     }
+}
+
+/// The headless driver's three crossings are the external host's alone
+/// (decisions-log item 231).
+///
+/// `the_match_is_stepped_in_one_module` lets `headless.rs` name the driving
+/// methods, and a scan for those names cannot see a handler that calls
+/// `headless::play_push` instead. So the crossings' own names are held: each
+/// is defined once, in the driver, called once, in the host loop, and named
+/// nowhere else in the crate. And the driver's Lull crossing asks whether the
+/// outside seat is ready itself, so the rule that a headless Lull ends on
+/// that seat's word is in the one place that can end it.
+#[test]
+fn the_headless_driver_is_the_external_hosts_alone() {
+    let findings = scan_except(HEADLESS_CROSSINGS, &[HEADLESS_MODULE, HEADLESS_CALLER]);
+    assert!(
+        findings.is_empty(),
+        "a headless crossing is named outside the driver and the host loop:\n{}",
+        findings.join("\n")
+    );
+    let headless = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(HEADLESS_MODULE);
+    let text = std::fs::read_to_string(&headless).expect("the headless driver");
+    let lines = code_lines(&text);
+    for (needle, _) in HEADLESS_CROSSINGS {
+        let named: Vec<&(usize, String)> = lines
+            .iter()
+            .filter(|(_, line)| uses(line, needle))
+            .collect();
+        assert!(
+            named.len() == 1
+                && named
+                    .iter()
+                    .all(|(_, line)| line.trim_start().starts_with("pub(crate) fn ")),
+            "`{needle}` is defined once in {HEADLESS_MODULE}, crate-private, and the driver does \
+             not call its own crossings: {named:?}"
+        );
+        assert_eq!(
+            uses_in(HEADLESS_CALLER, needle),
+            1,
+            "`{needle}` is called once, by the external seat's host in {HEADLESS_CALLER}"
+        );
+    }
+    let asks: Vec<&(usize, String)> = lines
+        .iter()
+        .filter(|(_, line)| uses(line, "seat_is_ready"))
+        .collect();
+    assert_eq!(
+        asks.len(),
+        1,
+        "the Lull crossing asks once whether the outside seat is ready: {asks:?}"
+    );
+    assert_eq!(
+        uses_in("src/serve.rs", "seat_is_ready"),
+        0,
+        "the host loop leaves the ready question to the driver, which cannot be skipped"
+    );
+
+    // Powers, as well as names: what the driver may not grow into.
+    let mut beyond: Vec<String> = Vec::new();
+    for (number, line) in &lines {
+        for (needle, why) in HEADLESS_BANNED {
+            if uses(line, needle) {
+                beyond.push(format!(
+                    "{HEADLESS_MODULE}:{number}: `{needle}` -- {why}\n    {}",
+                    line.trim()
+                ));
+            }
+        }
+    }
+    assert!(
+        beyond.is_empty(),
+        "the headless driver reaches for a host's power:\n{}",
+        beyond.join("\n")
+    );
+    let lulls: Vec<&(usize, String)> = lines
+        .iter()
+        .filter(|(_, line)| uses(line, "open_lull"))
+        .collect();
+    assert_eq!(
+        lulls.len(),
+        1,
+        "the driver opens a Lull in one place, as it leaves a recap: {lulls:?}"
+    );
 }
 
 /// The host-side test seam is reached by no wire method (item 107 (7)).

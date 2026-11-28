@@ -5,11 +5,15 @@
 //! clients layer, detailed in spec §12.
 //!
 //! Spec §12's five commands — `verify`, `schema`, `docs`, `scenario run`,
-//! `seat doctor` — and `host`, which serves one match to the Godot client over
-//! this process's own stdio pipe (decisions-log item 107 (2); [`host`]).
-//! **There is no `connect`** — nothing outside the game attaches
-//! to a seat in v1 (AGENTS.md §11), the Seat Gateway is internal, and the
-//! published API is v1.1.
+//! `seat doctor` — `host`, which serves one match to the Godot client over
+//! this process's own stdio pipe (decisions-log item 107 (2); [`host`]), and
+//! the experimental `match` commands, the external seat: one seat of a
+//! headless match played by a program outside the game (decisions-log item
+//! 231; [`external`]).
+//! **There is no `connect`** — nothing attaches to a seat over a socket in v1
+//! (AGENTS.md §11), the Seat Gateway is internal, and the published API is
+//! v1.1. The external seat is a match the program starts itself, through this
+//! binary's own standard input and output, with a seat's rights and no token.
 //!
 //! # It is an ordinary client
 //!
@@ -23,6 +27,7 @@
 //! | [`docs`] | the checked-in `gp.v1` descriptor set and the verifier's catalogue |
 //! | [`scenario`] | a match hosted by the gateway's `Host` behind a `Surface` |
 //! | [`doctor`] | all four of the above, asked whether they work here |
+//! | [`external`] | the gateway's answers to one seat's calls, as written |
 //!
 //! Nothing in this crate re-implements a rule, re-words a diagnostic or does
 //! arithmetic on `$`, `kW` or a duration. It is not a walled crate either
@@ -41,6 +46,7 @@ pub mod cli;
 pub mod docs;
 pub mod doctor;
 pub mod exit;
+pub mod external;
 pub mod host;
 pub mod lobby;
 pub mod rules;
@@ -117,6 +123,15 @@ fn dispatch(invocation: &cli::Invocation) -> Result<String, Failure> {
         // command whose output is not a string returned here: it returns at
         // once, and nothing is appended to what it wrote, not even a newline.
         Command::Host => return host::run(root),
+        // `match serve` owns standard input and output the same way: one
+        // answer a line, written as each call is answered.
+        Command::Match {
+            dir,
+            verb: cli::MatchVerb::Serve,
+        } => {
+            return external::serve(root, dir, std::io::stdin().lock(), std::io::stdout().lock());
+        }
+        Command::Match { dir, verb } => external::run(root, dir, verb),
         Command::Help => Ok(strings::help()),
         Command::Version => Ok(strings::version()),
         Command::Verify {

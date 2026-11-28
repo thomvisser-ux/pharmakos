@@ -53,9 +53,11 @@ const NAME: &'static str = "VerifyPlan";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.VerifyPlan".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.VerifyPlan".into() }}
 /// Namespace holder for the read-method budgets. Results are truncated in a
-/// fixed salience order. No v1 client is a model, so nothing actually spends
-/// these tokens; the budgets are kept because they are the shape the v1.1 API
-/// needs (spec section 12, "Budgets").
+/// fixed salience order. No client inside the v1 game is a model; the first
+/// reader that spends these tokens is a program that plays the experimental
+/// external seat (decisions-log item 231). The budgets are kept because they
+/// are the shape the v1.1 API needs (spec section 12, "Budgets", as amended
+/// after S3).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReadOptions {
     #[prost(enumeration="read_options::Detail", tag="1")]

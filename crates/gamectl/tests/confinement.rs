@@ -29,6 +29,7 @@ const SOURCES: &[&str] = &[
     "src/docs.rs",
     "src/doctor.rs",
     "src/exit.rs",
+    "src/external.rs",
     "src/host.rs",
     "src/lib.rs",
     "src/lobby.rs",
@@ -726,6 +727,22 @@ fn nothing_here_attaches_to_a_seat_from_outside() {
             "0.0.0.0",
             "the gateway binds 127.0.0.1 and ::1 and nothing else, with no flag that widens it",
         ),
+        (
+            "UdpSocket",
+            "no datagram either: nothing here sends anything anywhere (AGENTS.md section 7)",
+        ),
+        (
+            "process::Command",
+            "the game never starts a program: the program outside starts `gamectl`, never the \
+             other way round (AGENTS.md sections 2 and 7; decisions-log item 231)",
+        ),
+        ("Command::new", "the same rule, by the call"),
+        (
+            "env::var",
+            "no source of this crate names the environment: what a command does is on its \
+             command line, and a key in a variable is a key the game would hold (AGENTS.md \
+             section 7); the gateway reads it for `gamectl host`, to find the lobby's folder",
+        ),
     ];
     for relative in SOURCES {
         let text = source(relative);
@@ -789,8 +806,22 @@ fn no_message_names_the_binary_outside_the_string_table() {
 /// `actual_for`, which strips `expected.` and produces `actual.`. A producer
 /// that could write its own expectation is a producer that cannot fail
 /// (`tests/golden/README.md` rule 4).
+///
+/// Every way the standard library makes or replaces a file is looked for
+/// ([`FILE_MAKERS`]), not `fs::write` alone: the external seat's module makes
+/// its files by `OpenOptions`, `File::create` and a rename, and a scan that
+/// knew one spelling would have stopped seeing it.
 #[test]
 fn nothing_here_writes_a_committed_golden() {
+    /// The calls that make, replace or rename a file.
+    const FILE_MAKERS: &[&str] = &[
+        "fs::write",
+        "fs::copy",
+        "fs::rename",
+        "File::create",
+        "File::options",
+        "OpenOptions",
+    ];
     let mut writers: Vec<&str> = Vec::new();
     for relative in SOURCES {
         let text = source(relative);
@@ -798,7 +829,7 @@ fn nothing_here_writes_a_committed_golden() {
             if line.trim_start().starts_with("//") {
                 continue;
             }
-            if line.contains("fs::write") || line.contains("fs::copy") {
+            if FILE_MAKERS.iter().any(|maker| line.contains(maker)) {
                 if !writers.contains(relative) {
                     writers.push(relative);
                 }
@@ -811,10 +842,15 @@ fn nothing_here_writes_a_committed_golden() {
     }
     assert_eq!(
         writers,
-        vec!["src/scenario/nightly.rs", "src/scenario/run.rs"],
-        "two modules write a file: `run.rs` the fresh chain the `golden` step compares, and \
-         `nightly.rs` the result a run over a seed file writes to `--out`. A third writer is a \
-         third place a golden could be written from"
+        vec![
+            "src/external.rs",
+            "src/scenario/nightly.rs",
+            "src/scenario/run.rs"
+        ],
+        "three modules write a file: `external.rs` its three files in a match's own folder \
+         (the config line, the lock and an ended match's last recap); `run.rs` the fresh chain \
+         the `golden` step compares, and `nightly.rs` the result a run over a seed file writes \
+         to `--out`. A fourth writer is a fourth place a golden could be written from"
     );
     assert!(
         source("src/lib.rs").contains("strip_prefix(\"expected.\")"),
@@ -918,6 +954,26 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
         "round_limit.unwrap_or(default_limit)",
         "never read: an absent key is already the default, and a bad one is a problem \
          recorded above, so `load` returns no scenario",
+    ),
+    (
+        "external.rs",
+        "(\"--seed\", seed.unwrap_or(DEFAULT_SEED)),",
+        "the documented default: `match new` with no `--seed` (`OPTIONS`' row says so)",
+    ),
+    (
+        "external.rs",
+        "(\"--seats\", seats.unwrap_or(DEFAULT_SEATS)),",
+        "the documented default: `match new` with no `--seats`",
+    ),
+    (
+        "external.rs",
+        "(\"--seat\", seat.unwrap_or(DEFAULT_SEAT)),",
+        "the documented default: `match new` with no `--seat`",
+    ),
+    (
+        "external.rs",
+        "(\"--rounds\", rounds.unwrap_or(DEFAULT_ROUNDS)),",
+        "the documented default: `match new` with no `--rounds`, the lobby's round limit",
     ),
     (
         "nightly.rs",

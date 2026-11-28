@@ -14,7 +14,9 @@
 //!
 //! # There is no `connect`
 //!
-//! AGENTS.md §11: nothing outside the game attaches to a seat in v1. An
+//! AGENTS.md §11: nothing attaches to a seat over a socket in v1, and the
+//! one door for a program outside the game is the experimental `match`
+//! commands, a headless match the program starts itself ([`crate::external`]). An
 //! unknown command is a usage error, and `connect` gets a sentence of its own
 //! ([`crate::strings::unknown_command`]) rather than the generic one, because
 //! somebody typing it has read a roadmap and deserves to be told which version
@@ -53,8 +55,10 @@ pub struct CommandRow {
 /// Every command, in the order the help prints them.
 ///
 /// Spec §12's list, in full: `verify`, `schema`, `docs`, `scenario run`,
-/// `seat doctor` — and `host`, the child process the Godot lobby spawns
-/// (decisions-log item 107 (2)). Nothing else, and in particular no `connect`.
+/// `seat doctor` — `host`, the child process the Godot lobby spawns
+/// (decisions-log item 107 (2)), and `match`, the experimental external
+/// seat, one row a subcommand (decisions-log item 231). Nothing else, and in
+/// particular no `connect`.
 pub const COMMANDS: &[CommandRow] = &[
     CommandRow {
         name: "verify",
@@ -87,6 +91,36 @@ pub const COMMANDS: &[CommandRow] = &[
         usage: "host",
         about: "serve one match to the game client over this process's stdio pipe; the \
                 lobby starts it, and it refuses a terminal",
+    },
+    CommandRow {
+        name: "match",
+        usage: "match new --dir <dir>",
+        about: "experimental: start a headless match in a new folder, one seat played from \
+                outside through the commands below and every other seat built in",
+    },
+    CommandRow {
+        name: "match",
+        usage: "match call <method>",
+        about: "experimental: make one gp.api.v1 call as that seat and print the answer; \
+                `set_ready` is what lets the Push play",
+    },
+    CommandRow {
+        name: "match",
+        usage: "match submit <playbook>",
+        about: "experimental: submit a playbook file as that seat's orders for the round and \
+                print the verifier's report",
+    },
+    CommandRow {
+        name: "match",
+        usage: "match brief",
+        about: "experimental: print what that seat is told this round, in the gateway's own \
+                words",
+    },
+    CommandRow {
+        name: "match",
+        usage: "match serve",
+        about: "experimental: answer that seat's calls on this process's stdio, one JSON-RPC \
+                request a line in and one answer a line out, until standard input ends",
     },
 ];
 
@@ -189,6 +223,43 @@ pub const OPTIONS: &[OptionRow] = &[
         flag: "--out",
         command: "scenario",
         about: "the file a run over --seeds writes its result to (default: standard output)",
+    },
+    OptionRow {
+        spelling: "    --dir <dir>",
+        flag: "--dir",
+        command: "match",
+        about: "the match's own folder: `new` makes it, and every other match command names \
+                it; one folder, one match",
+    },
+    OptionRow {
+        spelling: "    --seed <seed>",
+        flag: "--seed",
+        command: "match",
+        about: "`new`: the match seed, `0x` and hex digits or decimal (default: 1)",
+    },
+    OptionRow {
+        spelling: "    --seats <n>",
+        flag: "--seats",
+        command: "match",
+        about: "`new`: how many seats the match has (default: 2)",
+    },
+    OptionRow {
+        spelling: "    --seat <n>",
+        flag: "--seat",
+        command: "match",
+        about: "`new`: the seat played from outside (default: 0)",
+    },
+    OptionRow {
+        spelling: "    --rounds <n>",
+        flag: "--rounds",
+        command: "match",
+        about: "`new`: the round limit (default: 3, the lobby's)",
+    },
+    OptionRow {
+        spelling: "    --params <file>",
+        flag: "--params",
+        command: "match",
+        about: "`call`: a file holding the call's params, one JSON object (default: no params)",
     },
 ];
 
@@ -307,6 +378,50 @@ pub enum Command {
     /// Serve one match to the Godot client over this process's own stdio
     /// pipe, until standard input closes (decisions-log item 107 (2)).
     Host,
+    /// One of the external seat's commands (decisions-log item 231).
+    Match {
+        /// `--dir`: the match's own folder.
+        dir: PathBuf,
+        /// What to do there.
+        verb: MatchVerb,
+    },
+}
+
+/// What a `match` command does in its folder.
+///
+/// The values `new` takes are kept as the text the caller typed: the gateway
+/// reads them as it reads a lobby's config line, so a seed, a seat count or a
+/// round limit is refused by the one reader that knows what a match takes,
+/// and this crate holds no second copy of those rules.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum MatchVerb {
+    /// Start a match.
+    New {
+        /// `--seed`, as typed.
+        seed: Option<String>,
+        /// `--seats`, as typed.
+        seats: Option<String>,
+        /// `--seat`, as typed.
+        seat: Option<String>,
+        /// `--rounds`, as typed.
+        rounds: Option<String>,
+    },
+    /// Make one call.
+    Call {
+        /// The method's wire name.
+        method: String,
+        /// `--params`: the file its params are read from.
+        params: Option<PathBuf>,
+    },
+    /// Submit a playbook file.
+    Submit {
+        /// The `.jsonc` file.
+        path: PathBuf,
+    },
+    /// Print what the seat is told.
+    Brief,
+    /// Answer calls on standard input until it ends.
+    Serve,
 }
 
 /// One whole command line, parsed.
@@ -350,6 +465,7 @@ where
     let mut depth: Option<Depth> = None;
     let mut options = RunOptions::default();
     let mut preset: Option<Preset> = None;
+    let mut seat = MatchOptions::default();
     let mut operands: Vec<OsString> = Vec::new();
 
     loop {
@@ -417,20 +533,15 @@ where
                 once(&mut options.seeds, "--seeds", PathBuf::from(value))?;
             }
             Long("format") => {
-                let value = flag_value(&mut parser)?;
-                let name = value.to_string_lossy().into_owned();
-                let Some(format) = Format::from_name(&name) else {
-                    return Err(Failure::usage(strings::bad_value(
-                        "--format",
-                        &name,
-                        Format::NAMES,
-                    )));
-                };
-                once(&mut options.format, "--format", format)?;
+                once(&mut options.format, "--format", format_value(&mut parser)?)?;
             }
             Long("out") => {
                 let value = flag_value(&mut parser)?;
                 once(&mut options.out, "--out", PathBuf::from(value))?;
+            }
+            Long(name) if MATCH_FLAGS.contains(&name) => {
+                let name = name.to_owned();
+                match_flag(&name, &mut parser, &mut seat)?;
             }
             Value(value) => operands.push(value),
             other => {
@@ -440,8 +551,52 @@ where
     }
 
     let root = root.unwrap_or_else(|| cwd.to_path_buf());
-    let command = command_of(&operands, part, depth, preset, options)?;
+    let command = command_of(&operands, part, depth, preset, options, seat)?;
     Ok(Invocation { root, command })
+}
+
+/// The `match` commands' own options, as typed.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+struct MatchOptions {
+    dir: Option<PathBuf>,
+    params: Option<PathBuf>,
+    seed: Option<String>,
+    seats: Option<String>,
+    seat: Option<String>,
+    rounds: Option<String>,
+}
+
+/// The long flags the `match` commands read, without their dashes.
+const MATCH_FLAGS: &[&str] = &["dir", "params", "seed", "seats", "seat", "rounds"];
+
+/// Read one of [`MATCH_FLAGS`]' values into `seat`.
+fn match_flag(
+    name: &str,
+    parser: &mut lexopt::Parser,
+    seat: &mut MatchOptions,
+) -> Result<(), Failure> {
+    let value = flag_value(parser)?;
+    match name {
+        "dir" => once(&mut seat.dir, "--dir", PathBuf::from(value)),
+        "params" => once(&mut seat.params, "--params", PathBuf::from(value)),
+        "seed" => once(&mut seat.seed, "--seed", text_of(&value, "--seed")?),
+        "seats" => once(&mut seat.seats, "--seats", text_of(&value, "--seats")?),
+        "seat" => once(&mut seat.seat, "--seat", text_of(&value, "--seat")?),
+        "rounds" => once(&mut seat.rounds, "--rounds", text_of(&value, "--rounds")?),
+        other => Err(Failure::internal(format!(
+            "`--{other}` is listed as a match flag and is not read"
+        ))),
+    }
+}
+
+/// A flag's value as text, refused when it is not Unicode: these values go
+/// into a line the gateway reads, and a lossy copy would be a value the
+/// caller did not type.
+fn text_of(value: &OsString, flag: &str) -> Result<String, Failure> {
+    value
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| Failure::usage(strings::flag_not_text(flag)))
 }
 
 /// Set a flag's value, once: a flag given twice is a usage error naming it,
@@ -453,6 +608,14 @@ fn once<T>(slot: &mut Option<T>, flag: &str, value: T) -> Result<(), Failure> {
     }
     *slot = Some(value);
     Ok(())
+}
+
+/// `--format`'s value: one of [`Format::NAMES`], or a usage error naming them.
+fn format_value(parser: &mut lexopt::Parser) -> Result<Format, Failure> {
+    let value = flag_value(parser)?;
+    let name = value.to_string_lossy().into_owned();
+    Format::from_name(&name)
+        .ok_or_else(|| Failure::usage(strings::bad_value("--format", &name, Format::NAMES)))
 }
 
 /// The value after a flag that takes one.
@@ -469,6 +632,7 @@ fn command_of(
     depth: Option<Depth>,
     preset: Option<Preset>,
     options: RunOptions,
+    seat: MatchOptions,
 ) -> Result<Command, Failure> {
     let Some((first, rest)) = operands.split_first() else {
         return Err(Failure::usage(strings::no_command()));
@@ -490,6 +654,12 @@ fn command_of(
                 ("--seeds", options.seeds.is_some()),
                 ("--format", options.format.is_some()),
                 ("--out", options.out.is_some()),
+                ("--dir", seat.dir.is_some()),
+                ("--params", seat.params.is_some()),
+                ("--seed", seat.seed.is_some()),
+                ("--seats", seat.seats.is_some()),
+                ("--seat", seat.seat.is_some()),
+                ("--rounds", seat.rounds.is_some()),
             ],
         )?;
     }
@@ -569,8 +739,85 @@ fn command_of(
             no_operands("host", rest)?;
             Ok(Command::Host)
         }
+        "match" => match_command(rest, seat),
         other => Err(Failure::usage(strings::unknown_command(other))),
     }
+}
+
+/// The subcommands `match` has, in the order a refusal names them.
+pub const MATCH_VERBS: &[&str] = &["new", "call", "submit", "brief", "serve"];
+
+/// `match <verb>`, with its folder and the flags that verb reads.
+fn match_command(rest: &[OsString], seat: MatchOptions) -> Result<Command, Failure> {
+    let Some((sub, rest)) = rest.split_first() else {
+        return Err(Failure::usage(strings::missing_operand(
+            "match",
+            "subcommand (`new`, `call`, `submit`, `brief` or `serve`)",
+        )));
+    };
+    let sub = sub.to_string_lossy().into_owned();
+    if !MATCH_VERBS.contains(&sub.as_str()) {
+        return Err(Failure::usage(strings::unknown_subcommand("match", &sub)));
+    }
+    let command = format!("match {sub}");
+    // A flag another `match` command reads is refused here, as a flag another
+    // command reads is refused above: it would do nothing.
+    for (flag, given, owner) in [
+        ("--seed", seat.seed.is_some(), "match new"),
+        ("--seats", seat.seats.is_some(), "match new"),
+        ("--seat", seat.seat.is_some(), "match new"),
+        ("--rounds", seat.rounds.is_some(), "match new"),
+        ("--params", seat.params.is_some(), "match call"),
+    ] {
+        if given && command != owner {
+            return Err(Failure::usage(strings::flag_elsewhere(
+                &command,
+                flag,
+                &[owner],
+            )));
+        }
+    }
+    let Some(dir) = seat.dir else {
+        return Err(Failure::usage(strings::flag_missing(&command, "--dir")));
+    };
+    let verb = match sub.as_str() {
+        "new" => {
+            no_operands(&command, rest)?;
+            MatchVerb::New {
+                seed: seat.seed,
+                seats: seat.seats,
+                seat: seat.seat,
+                rounds: seat.rounds,
+            }
+        }
+        "call" => {
+            let Some(method) = rest.first() else {
+                return Err(Failure::usage(strings::missing_operand(&command, "method")));
+            };
+            if let Some(extra) = rest.get(1) {
+                return Err(Failure::usage(strings::extra_operand(
+                    &command,
+                    &extra.to_string_lossy(),
+                )));
+            }
+            MatchVerb::Call {
+                method: text_of(method, "the method")?,
+                params: seat.params,
+            }
+        }
+        "submit" => MatchVerb::Submit {
+            path: one_operand(&command, "playbook", rest)?,
+        },
+        "brief" => {
+            no_operands(&command, rest)?;
+            MatchVerb::Brief
+        }
+        _ => {
+            no_operands(&command, rest)?;
+            MatchVerb::Serve
+        }
+    };
+    Ok(Command::Match { dir, verb })
 }
 
 /// Every flag given belongs to the command it was given to.
@@ -655,6 +902,17 @@ mod tests {
                 "verify" => args.push("a.jsonc"),
                 "scenario" => args.extend(["run", "a.scenario.jsonc"]),
                 "seat" => args.push("doctor"),
+                // One row a subcommand: the usage's second word is the verb.
+                "match" => {
+                    let verb = row.usage.split(' ').nth(1).expect("a verb in the usage");
+                    args.push(verb);
+                    match verb {
+                        "call" => args.push("get_status"),
+                        "submit" => args.push("a.jsonc"),
+                        _ => {}
+                    }
+                    args.extend(["--dir", "d"]);
+                }
                 _ => {}
             }
             assert!(
@@ -758,6 +1016,7 @@ mod tests {
                 "verify" => vec!["verify", "a.jsonc"],
                 "schema" => vec!["schema"],
                 "scenario" => vec!["scenario", "run", "a.scenario.jsonc", "--seeds", "s.txt"],
+                "match" => vec!["match", "new", "--dir", "d"],
                 "" => vec!["docs"],
                 other => panic!("a command the table names and this test does not: {other}"),
             }
@@ -772,6 +1031,12 @@ mod tests {
                 "--seeds" => "s.txt",
                 "--format" => "json",
                 "--out" => "r.json",
+                "--dir" => "d",
+                "--seed" => "1",
+                "--seats" => "2",
+                "--seat" => "0",
+                "--rounds" => "3",
+                "--params" => "p.json",
                 other => panic!("a flag the table names and this test does not: {other}"),
             }
         };
@@ -781,9 +1046,9 @@ mod tests {
                 continue;
             }
             let mut args = command_for(row.command);
-            // `--seeds` already stands in the scenario line; adding it once
-            // more is the repeat.
-            if !(row.flag == "--seeds" && row.command == "scenario") {
+            // `--seeds` already stands in the scenario line, and `--dir` in
+            // the match line; adding it once more is the repeat.
+            if !(row.flag == "--seeds" && row.command == "scenario") && row.flag != "--dir" {
                 args.extend([row.flag, value_for(row.flag)]);
             }
             args.extend([row.flag, value_for(row.flag)]);
@@ -799,8 +1064,9 @@ mod tests {
             checked = checked.saturating_add(1);
         }
         assert_eq!(
-            checked, 9,
-            "every row that takes a value, verify's and scenario's --format both"
+            checked, 15,
+            "every row that takes a value, verify's and scenario's --format both, and the six \
+             the match commands read"
         );
     }
 

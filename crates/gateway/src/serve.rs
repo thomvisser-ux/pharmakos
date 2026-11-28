@@ -135,6 +135,57 @@
 //! synchronously on one Lull tick, which a socket's
 //! [`crate::limit::CALLS_PER_TICK`] would cut short.
 //!
+//! # The external seat (decisions-log item 231)
+//!
+//! [`External`] hosts a match **with no socket**, for one seat played by a
+//! program outside the game: the config line's `human seat`. It is this host
+//! loop with the listener, the threads and the lobby taken away, and it shares
+//! everything that is left: the match is opened and resumed by the same
+//! function ([`open_match`]), the other seats are planned by the same
+//! [`InProcessSeats`], and the saves, the sealed playbooks, the chains and the
+//! audit log are written by the same [`Writer`] under the same rule.
+//!
+//! What differs, and why each is safe:
+//!
+//! * **No token leaves the gateway, and none is minted that could move the
+//!   match.** The seat's token is a private field of [`External`] with no
+//!   accessor, so the binary that drives it (`gamectl match`) holds none and
+//!   can print none. There is no admin token: the match moves by
+//!   [`External::advance`], a host-side call no method reaches, and only once
+//!   the outside seat has said it is ready. The three boundaries it crosses
+//!   are the `headless` module's, the one place beside the admin handlers
+//!   that may name a driving method; this file names none.
+//! * **The seat's rate is its own**, [`crate::limit::EXTERNAL_LIMITS`], for
+//!   the reason an in-process seat's is: a headless Lull has no timer and
+//!   reports no clock, so every call of a Lull lands on one tick. It is a
+//!   rate and never a read, and it is counted in this process: a new process
+//!   has a new count. What the limiter does not bound (a message that was
+//!   never a request, and the refusals past the budget, each a line in the
+//!   audit log) the host bounds itself: after
+//!   [`crate::limit::EXTERNAL_REFUSALS_IN_A_ROW`] of them in a row, or
+//!   [`crate::limit::EXTERNAL_REFUSALS_IN_A_PROCESS`] in all, its door
+//!   closes for the process ([`External::door_closed`]).
+//! * **The match's end is on disk after the seat's last recap is.** A socket
+//!   host writes the `ended` save with the final chain. This host holds it
+//!   back until [`External::close`], so its caller can keep the recap first
+//!   (`gamectl match` writes it to a file): until then the final round's
+//!   `sealed` save stands, and a process that dies, or cannot keep the
+//!   recap and says so ([`External::put_back`]), leaves a match the next
+//!   process replays to the same end and the same recap.
+//! * **A Lull lasts until the seat says it may end.** No clock is read or
+//!   reported, so nothing here depends on how fast the machine or the program
+//!   is, and the Lull's length is not an input to anything hashed. The Push
+//!   is stepped to its segment's end in one go, as `gamectl scenario run`
+//!   steps it.
+//! * **A message is a line or a call's text, not a WebSocket frame**, so the
+//!   refusals a frame's assembler makes are made by [`External::call_bytes`]
+//!   instead: a message past the largest, and one that is not UTF-8, are
+//!   answered and audited, never repaired and never dropped.
+//!
+//! What does not differ is the door: every call the outside seat makes is
+//! [`Surface::call`] under a seat's scopes, with the same fog, the same phase
+//! checks and the same audit line as a socket's.
+//!
 //! # Bounds
 //!
 //! One request in flight per connection ([`crate::session`] waits for each
@@ -148,7 +199,7 @@
 
 use pharmakos_proto::json::grammar::Said;
 use pharmakos_proto::said;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -892,60 +943,14 @@ pub fn run_in<C: Read + Send + 'static, A: Write>(
     let mut lines = BufReader::new(control);
     let line = read_config(&mut lines)?;
     let config = line.config.clone();
-    let rules_hash = RulesHash::of(&setup.rules_json)?;
-    // The rules check before anything is written (S3's `vfyq2`, fix pass 6,
-    // item 3): a table the verifier refuses leaves no match folder behind.
-    Host::check_rules_text(&setup.rules_json)?;
     let mut operators = setup.operators;
-
-    // The save is read before the surface is opened (the wave-6 notes, H16),
-    // and a new match is refused before a map is generated if its id already
-    // has one.
-    // The largest a save of this match can be: what a resume reads to, and
-    // what the writer reads the disk to when it says what is there.
-    let largest = largest_save(&config, &setup.rules_json)?;
-    let (cache, mut surface, seats) = if line.resume {
-        // Open and read; parse and check the save against the config line;
-        // only then lay the folder out: a refused resume writes nothing.
-        let cache = MatchCache::reopen(data_root, &config.match_id)?;
-        let save = Save::parse(&cache.read_save(largest)?)?;
-        save.check(&config, rules_hash.0)?;
-        cache.lay_out_for_resume(config.seats)?;
-        // Read before the surface exists: the view's identity folds in the
-        // log's last sequence number, so that nothing the dead process served
-        // is read as this one's, and the resumed tick starts no lower than the
-        // log's last.
-        let continuation = cache.continuation()?;
-        let (surface, seats) = resume_surface(
-            &setup.rules_json,
-            setup.library,
-            &config,
-            &save,
-            continuation,
-        )?;
-        (cache, surface, seats)
-    } else {
-        let cache = MatchCache::open(
-            data_root,
-            &config.match_id,
-            &crate::cache::Header {
-                match_seed: config.seed,
-                seats: config.seats,
-                segment_lengths_ms: config.segment_lengths_ms.clone(),
-                round_limit: config.round_limit,
-                rules_hash: rules_hash.0,
-            },
-        )?;
-        let (surface, seats) = open_surface(&setup.rules_json, setup.library, &config)?;
-        (cache, surface, seats)
-    };
-    surface.audit().continue_after(cache.last_audit_seq()?);
-    if line.resume {
-        let tick = surface.time().tick;
-        surface
-            .audit()
-            .record(tick, None, None, "resumed", crate::audit::Outcome::Ok);
-    }
+    let OpenedMatch {
+        cache,
+        mut surface,
+        seats,
+        rules_hash,
+        largest,
+    } = open_match(&setup.rules_json, setup.library, data_root, &line)?;
 
     let listener = Listener::bind(0)?;
     let port = listener.port();
@@ -980,9 +985,11 @@ pub fn run_in<C: Read + Send + 'static, A: Write>(
     let writer = Writer {
         cache,
         config,
-        rules_hash: rules_hash.0,
+        rules_hash,
         largest,
-        drops: Arc::clone(&drops),
+        drops: Some(Arc::clone(&drops)),
+        hold_end: false,
+        held_end: RefCell::new(None),
         drops_recorded: Cell::new(false),
         audit_broken: Cell::new(false),
     };
@@ -1036,6 +1043,89 @@ pub fn run_in<C: Read + Send + 'static, A: Write>(
             "the surface thread ended in a panic, and the match it served is not saved past it",
         )),
     }
+}
+
+/// A match opened or resumed under a data root, before any token is minted:
+/// what [`run_in`] and [`External::open`] both start from.
+struct OpenedMatch {
+    cache: MatchCache,
+    surface: Surface,
+    seats: Vec<SeatId>,
+    rules_hash: u64,
+    /// The largest a save of this match can be ([`Save::max_bytes`]).
+    largest: u64,
+}
+
+/// Open the match a config line names, or resume the one saved under its id,
+/// with its private cache under `data_root`.
+///
+/// One function for the socket host and the external seat's, so that a match
+/// is opened, refused and resumed by the same rules whichever host serves it.
+///
+/// # Errors
+///
+/// As [`run`]'s, less the ones about a socket or a token.
+fn open_match(
+    rules_json: &str,
+    library: Option<PathBuf>,
+    data_root: &Path,
+    line: &ConfigLine,
+) -> Result<OpenedMatch, Error> {
+    let config = &line.config;
+    let rules_hash = RulesHash::of(rules_json)?;
+    // The rules check before anything is written (S3's `vfyq2`, fix pass 6,
+    // item 3): a table the verifier refuses leaves no match folder behind.
+    Host::check_rules_text(rules_json)?;
+
+    // The save is read before the surface is opened (the wave-6 notes, H16),
+    // and a new match is refused before a map is generated if its id already
+    // has one.
+    // The largest a save of this match can be: what a resume reads to, and
+    // what the writer reads the disk to when it says what is there.
+    let largest = largest_save(config, rules_json)?;
+    let (cache, mut surface, seats) = if line.resume {
+        // Open and read; parse and check the save against the config line;
+        // only then lay the folder out: a refused resume writes nothing.
+        let cache = MatchCache::reopen(data_root, &config.match_id)?;
+        let save = Save::parse(&cache.read_save(largest)?)?;
+        save.check(config, rules_hash.0)?;
+        cache.lay_out_for_resume(config.seats)?;
+        // Read before the surface exists: the view's identity folds in the
+        // log's last sequence number, so that nothing the dead process served
+        // is read as this one's, and the resumed tick starts no lower than the
+        // log's last.
+        let continuation = cache.continuation()?;
+        let (surface, seats) = resume_surface(rules_json, library, config, &save, continuation)?;
+        (cache, surface, seats)
+    } else {
+        let cache = MatchCache::open(
+            data_root,
+            &config.match_id,
+            &crate::cache::Header {
+                match_seed: config.seed,
+                seats: config.seats,
+                segment_lengths_ms: config.segment_lengths_ms.clone(),
+                round_limit: config.round_limit,
+                rules_hash: rules_hash.0,
+            },
+        )?;
+        let (surface, seats) = open_surface(rules_json, library, config)?;
+        (cache, surface, seats)
+    };
+    surface.audit().continue_after(cache.last_audit_seq()?);
+    if line.resume {
+        let tick = surface.time().tick;
+        surface
+            .audit()
+            .record(tick, None, None, "resumed", crate::audit::Outcome::Ok);
+    }
+    Ok(OpenedMatch {
+        cache,
+        surface,
+        seats,
+        rules_hash: rules_hash.0,
+        largest,
+    })
 }
 
 /// Wait for the surface thread's first flush, and hand its handle back once
@@ -1508,6 +1598,462 @@ fn advisor_call(
     surface.call(Some(token), request, &vision)
 }
 
+/// A match hosted for **one seat played from outside the game**, with no
+/// socket: the external seat (decisions-log item 231; the module docs, "The
+/// external seat").
+///
+/// The program outside never holds a token. This value holds the seat's, in
+/// a private field with no accessor, and [`External::call`] is
+/// [`Surface::call`] bound to it: the same authentication, scopes, phase
+/// checks, fog and audit as a socket's call, at [`crate::limit::EXTERNAL_LIMITS`].
+/// There is no admin token at all. The match moves only by the host's own
+/// hand ([`External::advance`]), and only when the seat has said it is ready:
+/// the seat's rights are a seat's, and "play the Push" is not one of them.
+///
+/// Every other seat is built in, planned by the factory in [`Setup`] exactly
+/// as [`run`] plans them, and the outside seat is advised as a human's is, so
+/// a round it seals nothing in is filed that seat's safe playbook.
+///
+/// The private cache, the saves and the replay's inputs are written as
+/// [`run`] writes them, by the same [`Writer`] and under the same rule: a
+/// boundary is on disk before anyone is told it was crossed. A match is
+/// therefore put down and taken up between any two calls
+/// ([`External::close`], then a resume line), which is what lets one command
+/// make one call.
+pub struct External {
+    surface: Surface,
+    writer: Writer,
+    in_process: InProcessSeats,
+    /// The seat's own token: minted here, used here, never rendered.
+    token: Token,
+    /// The token's handle, which every audit line of the outside seat's
+    /// carries, the ones for a message that was never a request included.
+    handle: Handle,
+    seat: SeatId,
+    /// The write this host stopped on, once it has: every later call is
+    /// answered with it, as a socket host's connections are.
+    stopped: Option<Error>,
+    /// Refusals answered in a row, of the kinds a program stuck in a loop
+    /// makes ([`crate::limit::EXTERNAL_REFUSALS_IN_A_ROW`]).
+    refused_in_a_row: u32,
+    /// Such refusals answered by this process in all
+    /// ([`crate::limit::EXTERNAL_REFUSALS_IN_A_PROCESS`]).
+    refused: u32,
+    /// The door closed on one of those counts: no later message of this
+    /// process is read past its id, and none leaves a line of its own.
+    door_closed: bool,
+    /// Messages that arrived after the door closed: counted here, and said
+    /// in one audit line as the host puts the match down.
+    unanswered: u64,
+}
+
+impl std::fmt::Debug for External {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("External")
+            .field("seat", &self.seat.raw())
+            .field("in_process", &self.in_process)
+            .field("stopped", &self.stopped.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl External {
+    /// Open the match `line` names, or resume it, with its private cache
+    /// under `data_root`, and bring it to where the outside seat acts next:
+    /// a Lull every built-in seat has planned, or the match's end.
+    ///
+    /// The outside seat is the line's `human seat`: the config line has one
+    /// slot for a seat the built-in operator does not play, and a headless
+    /// match fills it with the program outside (item 231). A resume that
+    /// finds the match in a Push, because the last process ended in one,
+    /// replays that Push first, from the save its seals left.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] for a line with no human seat,
+    /// and as [`run`]'s for the match itself; [`crate::error::Code::Internal`]
+    /// when a write the match needs fails.
+    pub fn open(setup: Setup, data_root: &Path, line: &ConfigLine) -> Result<External, Error> {
+        let Some(raw) = line.config.human_seat else {
+            return Err(Error::invalid(
+                "an external seat is the config line's human seat, and this line has none",
+            ));
+        };
+        if u32::from(raw) >= line.config.seats {
+            return Err(Error::invalid(said!(
+                "this match has {} seats and the external seat is seat {}",
+                line.config.seats,
+                raw
+            )));
+        }
+        let seat = SeatId::new(raw);
+        let mut operators = setup.operators;
+        let OpenedMatch {
+            cache,
+            mut surface,
+            seats,
+            rules_hash,
+            largest,
+        } = open_match(&setup.rules_json, setup.library, data_root, line)?;
+
+        let minted_at = surface.time().tick;
+        let match_id = surface.match_id().to_owned();
+        let subject = Subject::Seat(seat);
+        let (token, handle) =
+            surface
+                .tokens()
+                .mint(subject, &match_id, seat_scopes(), minted_at)?;
+        surface.register_in_process(
+            handle,
+            InProcess {
+                limits: crate::limit::EXTERNAL_LIMITS,
+                scratch_view: false,
+            },
+        );
+        // Which handle is the program outside, said once per process: every
+        // line this seat's calls leave after it carries that handle.
+        surface.audit().record(
+            minted_at,
+            Some(subject),
+            Some(handle),
+            "external seat",
+            crate::audit::Outcome::Ok,
+        );
+        let in_process = InProcessSeats::open(&mut surface, &seats, Some(raw), operators.as_mut())?;
+        let mut external = External {
+            surface,
+            writer: Writer {
+                cache,
+                config: line.config.clone(),
+                rules_hash,
+                largest,
+                drops: None,
+                hold_end: true,
+                held_end: RefCell::new(None),
+                drops_recorded: Cell::new(false),
+                audit_broken: Cell::new(false),
+            },
+            in_process,
+            token,
+            handle,
+            seat,
+            stopped: None,
+            refused_in_a_row: 0,
+            refused: 0,
+            door_closed: false,
+            unanswered: 0,
+        };
+        external.advance()?;
+        Ok(external)
+    }
+
+    /// Answer one JSON-RPC request, as the outside seat.
+    ///
+    /// `text` is one request; the answer is one response object, always, for
+    /// the caller to write in the layout its stream wants
+    /// ([`pharmakos_proto::json::write`], or `write_line` for a stream of
+    /// lines): a refusal is an answer, and a message that is not a request is
+    /// answered under a null id, as JSON-RPC asks. What the call left pending
+    /// (its audit line) is on disk before the answer is returned; when that
+    /// write fails the answer is the typed error instead, and every later
+    /// call's.
+    ///
+    /// The match does not move here. A `set_ready` is answered where the
+    /// match stands; [`External::advance`] is what plays the Push.
+    pub fn call(&mut self, text: &str) -> Json {
+        self.call_bytes(text.as_bytes())
+    }
+
+    /// [`External::call`] over the bytes a stream handed in, which may not be
+    /// text at all.
+    ///
+    /// Two refusals are made here, before anything is parsed, each answered
+    /// under a null id and each one line in the audit log: a message past
+    /// [`crate::frame::MAX_MESSAGE_BYTES`], refused unread (a caller that
+    /// frames a stream may hand over only the first bytes of one, so long as
+    /// they pass the cap), and a message that is not UTF-8, which is never
+    /// repaired into text that might then parse.
+    ///
+    /// **The door closes on a program stuck in a loop.** A message that was
+    /// never a request does not reach the rate limiter, and a call the limiter
+    /// refuses still leaves its line, so neither is bounded by the call
+    /// budget. After [`crate::limit::EXTERNAL_REFUSALS_IN_A_ROW`] such
+    /// refusals in a row, or [`crate::limit::EXTERNAL_REFUSALS_IN_A_PROCESS`]
+    /// in all, the door closes for the rest of this process
+    /// ([`External::door_closed`]): the closing is one audit line, every
+    /// later message is answered `RATE_LIMITED` in words that say so, read
+    /// for its id only and with no line of its own, and their count is one
+    /// line as the match is put down. A headless Lull's tick stands still, so a spent budget
+    /// stays spent for the process; the next process has its own.
+    pub fn call_bytes(&mut self, bytes: &[u8]) -> Json {
+        if let Some(error) = &self.stopped {
+            return rpc::failure(&id_of(bytes), error);
+        }
+        if self.door_closed {
+            // A count, said in one line: it cannot pass a `u64` in any
+            // process that ends, and one that did would be said as the
+            // largest, which is still "more than anyone read".
+            self.unanswered = self.unanswered.saturating_add(1);
+            return rpc::failure(&id_of(bytes), &door_closed_error());
+        }
+        let (id, response, admitted) = if crate::frame::message_fits(bytes.len()) {
+            match std::str::from_utf8(bytes) {
+                Ok(text) => match rpc::parse(text) {
+                    Ok(request) => {
+                        let vision = vision_of(&self.surface);
+                        let response = self.surface.call(Some(&self.token), &request, &vision);
+                        let admitted = !is_rate_limited(&response);
+                        (request.id, response, admitted)
+                    }
+                    Err(malformed) => (
+                        Json::Null,
+                        self.unread("call <malformed>", &malformed),
+                        false,
+                    ),
+                },
+                Err(_) => (
+                    Json::Null,
+                    self.unread(
+                        "call <not utf-8>",
+                        &rpc::Malformed::Parse(String::from("a request is UTF-8 text")),
+                    ),
+                    false,
+                ),
+            }
+        } else {
+            (
+                Json::Null,
+                self.unread(
+                    "call <oversize>",
+                    &rpc::Malformed::Invalid(format!(
+                        "a request is at most {} bytes, and this one is longer",
+                        crate::frame::MAX_MESSAGE_BYTES
+                    )),
+                ),
+                false,
+            )
+        };
+        if admitted {
+            self.refused_in_a_row = 0;
+        } else {
+            // Both counts stop at their caps, where the door closes and
+            // nothing more is counted.
+            self.refused_in_a_row = self.refused_in_a_row.saturating_add(1);
+            self.refused = self.refused.saturating_add(1);
+            if self.refused_in_a_row >= crate::limit::EXTERNAL_REFUSALS_IN_A_ROW
+                || self.refused >= crate::limit::EXTERNAL_REFUSALS_IN_A_PROCESS
+            {
+                self.door_closed = true;
+                let tick = self.surface.time().tick;
+                self.surface.audit().refused(
+                    tick,
+                    Some(Subject::Seat(self.seat)),
+                    Some(self.handle),
+                    "external seat door closed",
+                    &door_closed_error(),
+                );
+            }
+        }
+        match self.writer.flush(&mut self.surface) {
+            Ok(()) => response,
+            Err(error) => rpc::failure(&id, &self.stop(error)),
+        }
+    }
+
+    /// The answer to a message that was never a request, and its line in the
+    /// audit log, under the outside seat's handle: `action` is one of this
+    /// function's callers' fixed literals, never a byte the caller sent.
+    fn unread(&mut self, action: &'static str, malformed: &rpc::Malformed) -> Json {
+        let tick = self.surface.time().tick;
+        self.surface.audit().refused(
+            tick,
+            Some(Subject::Seat(self.seat)),
+            Some(self.handle),
+            action,
+            &Error::invalid(said!("a message that is not a request")),
+        );
+        rpc::malformed_response(malformed)
+    }
+
+    /// Whether this process's door has closed on the outside seat
+    /// ([`External::call_bytes`]). A caller that feeds a stream stops feeding
+    /// it: nothing more is read in this process, and the match is put down
+    /// and taken up again to go on.
+    #[must_use]
+    pub fn door_closed(&self) -> bool {
+        self.door_closed
+    }
+
+    /// The line that says how many messages arrived after the door closed,
+    /// written once, as the match is put down or the host stops.
+    fn say_unanswered(&mut self) {
+        if self.unanswered == 0 {
+            return;
+        }
+        let count = std::mem::take(&mut self.unanswered);
+        let tick = self.surface.time().tick;
+        self.surface.audit().record(
+            tick,
+            Some(Subject::Seat(self.seat)),
+            Some(self.handle),
+            format!("external seat unanswered: {count}"),
+            crate::audit::Outcome::Ok,
+        );
+    }
+
+    /// Bring the match to where the outside seat acts next.
+    ///
+    /// In a Lull the seat has not called ready in, nothing moves: the
+    /// built-in seats plan it, once a process (a Lull taken up again by a new
+    /// process is planned again there, to the same playbooks: the operator
+    /// is a function of the match, the seat and the round), and that is all.
+    /// Once the seat is ready
+    /// the host seals every seat's orders, plays the Push to its segment's
+    /// end, closes the recap and opens the next Lull, which the built-in
+    /// seats plan; or the match ends. A Push or a recap a resume landed in is
+    /// played out the same way. Each boundary is on disk before the next is
+    /// crossed.
+    ///
+    /// The Lull has no timer: a headless host reads no clock and reports
+    /// none, so a Lull lasts until the seat says it may end.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when a write the match needs fails or
+    /// the match will not move as its phase says it should, and the sim's own
+    /// typed refusal of a tick. The host has then stopped: every later call
+    /// is answered with the same error, and what the disk holds is what a
+    /// resume reads.
+    pub fn advance(&mut self) -> Result<(), Error> {
+        if let Some(error) = &self.stopped {
+            return Err(error.clone());
+        }
+        match self.advance_until_the_seat_acts() {
+            Ok(()) => Ok(()),
+            Err(error) => Err(self.stop(error)),
+        }
+    }
+
+    fn advance_until_the_seat_acts(&mut self) -> Result<(), Error> {
+        use pharmakos_proto::gp::api::v1::status::Phase;
+        loop {
+            match self.surface.time().phase {
+                Phase::Lull => {
+                    self.in_process.plan(&mut self.surface);
+                    self.writer.flush(&mut self.surface)?;
+                    // The driver holds the rule: a Lull the outside seat
+                    // has not called ready in is left alone.
+                    if !crate::headless::leave_lull(&mut self.surface, self.seat)? {
+                        return Ok(());
+                    }
+                    self.writer.flush(&mut self.surface)?;
+                }
+                Phase::Push => {
+                    crate::headless::play_push(&mut self.surface)?;
+                    self.writer.flush(&mut self.surface)?;
+                }
+                Phase::Recap => {
+                    crate::headless::leave_recap(&mut self.surface)?;
+                    self.writer.flush(&mut self.surface)?;
+                }
+                Phase::Ended | Phase::Lobby | Phase::Unspecified => {
+                    self.writer.flush(&mut self.surface)?;
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    /// Stop on `error`: write the audit log's last lines and keep the error
+    /// for every later call.
+    fn stop(&mut self, error: Error) -> Error {
+        self.say_unanswered();
+        let error = self.writer.last_lines(&mut self.surface, error);
+        self.stopped = Some(error.clone());
+        error
+    }
+
+    /// Put the match down: write what is pending and, in a Lull, the `lull`
+    /// save a resume lands in; at the match's end, the `ended` save this
+    /// host held back (the module docs, "The match's end is on disk after
+    /// the seat's last recap is").
+    ///
+    /// # Errors
+    ///
+    /// The error this host stopped on, when it had; otherwise as
+    /// [`Writer::close`]: a Lull lost on the way out is said, never dropped.
+    pub fn close(mut self) -> Result<(), Error> {
+        if let Some(error) = self.stopped.take() {
+            return Err(error);
+        }
+        self.say_unanswered();
+        let closed = self
+            .writer
+            .write_held_end(&mut self.surface)
+            .and_then(|()| self.writer.close(&mut self.surface));
+        match closed {
+            Ok(()) => Ok(()),
+            Err(error) => Err(self.writer.last_lines(&mut self.surface, error)),
+        }
+    }
+
+    /// Put an ended match back **as not ended**: write what is pending but
+    /// not the `ended` save this host holds, so the final round's `sealed`
+    /// save stands and the next process replays the last Push to the same
+    /// end.
+    ///
+    /// For a caller that could not keep the seat's last recap: an ended match
+    /// is never taken up again, so the end goes to disk only after the recap
+    /// has. In a match that has not ended this is [`External::close`].
+    ///
+    /// # Errors
+    ///
+    /// As [`External::close`]'s.
+    pub fn put_back(self) -> Result<(), Error> {
+        drop(self.writer.held_end.take());
+        self.close()
+    }
+
+    /// Whether the match has ended: there is then no Lull to act in, and
+    /// every call a seat makes of a planning method is answered
+    /// `PHASE_CLOSED`.
+    #[must_use]
+    pub fn ended(&self) -> bool {
+        self.surface.time().phase == pharmakos_proto::gp::api::v1::status::Phase::Ended
+    }
+}
+
+/// The id a message carries, when it is a request; null when it is not one,
+/// as JSON-RPC asks of an answer to a message that could not be read.
+fn id_of(bytes: &[u8]) -> Json {
+    match std::str::from_utf8(bytes).map(rpc::parse) {
+        Ok(Ok(request)) => request.id,
+        Ok(Err(_)) | Err(_) => Json::Null,
+    }
+}
+
+/// Whether `response` is the rate limiter's refusal: read from the error's
+/// own name, the one place a response says which of the closed set it is.
+fn is_rate_limited(response: &Json) -> bool {
+    let name = response
+        .get("error")
+        .and_then(|error| error.get("data"))
+        .and_then(|data| data.get("code"));
+    matches!(name, Some(Json::String(name)) if name == Error::rate_limited("").name())
+}
+
+/// What a closed door answers ([`External::door_closed`]).
+fn door_closed_error() -> Error {
+    Error::rate_limited(said!(
+        "the outside seat's door is closed for this process after {} refusals in a row, or {} in \
+         all (messages that are not requests, and calls past the call budget); put the match \
+         down and take it up again",
+        crate::limit::EXTERNAL_REFUSALS_IN_A_ROW,
+        crate::limit::EXTERNAL_REFUSALS_IN_A_PROCESS
+    ))
+}
+
 /// Accept connections, bounded by [`MAX_CONNECTIONS`], one reader thread each.
 ///
 /// A connection thread parses every frame its socket sends, so it is made on
@@ -1663,8 +2209,16 @@ struct Writer {
     /// [`Writer::on_disk`] reads the save to.
     largest: u64,
     /// The dispatcher's counts of the connections it dropped, written into
-    /// the audit log once, as the match closes or stops.
-    drops: Arc<Drops>,
+    /// the audit log once, as the match closes or stops. None for a host
+    /// with no socket ([`External`]), which has no connection to drop and
+    /// writes no such line.
+    drops: Option<Arc<Drops>>,
+    /// Whether an `ended` save is held back from [`Writer::flush`] until
+    /// [`Writer::write_held_end`]: the external host's, whose caller keeps
+    /// the seat's last recap before the match's end is on disk.
+    hold_end: bool,
+    /// The `ended` save held back.
+    held_end: RefCell<Option<crate::save::SavedMatch>>,
     /// Whether the drop counts have been recorded: once, whichever of the
     /// close and the stop comes first (review 3: probe C's log held them
     /// twice).
@@ -1787,22 +2341,53 @@ impl Writer {
         if let Some(state) = pending.save
             && failures.is_empty()
         {
-            let (boundary, round) = (state.boundary, state.round);
-            if let Err(error) = self.write_save(state) {
-                surface
-                    .audit()
-                    .refused(tick, None, None, "write save", &error);
-                failures.push(Failure {
-                    what: said!(
-                        "the `{}` save of round {} could not be written",
-                        boundary.name(),
-                        round
-                    ),
-                    cause: Some(error.said()),
-                });
-                self.append(surface, &mut failures);
+            if self.hold_end && state.boundary == crate::save::Boundary::Ended {
+                self.held_end.replace(Some(state));
+            } else {
+                self.save(surface, state, &mut failures);
             }
         }
+        self.failed(failures)
+    }
+
+    /// Write `state` as the match's save; a failure is audited, added to
+    /// `failures` and its line appended.
+    fn save(
+        &self,
+        surface: &mut Surface,
+        state: crate::save::SavedMatch,
+        failures: &mut Vec<Failure>,
+    ) {
+        let tick = surface.time().tick;
+        let (boundary, round) = (state.boundary, state.round);
+        if let Err(error) = self.write_save(state) {
+            surface
+                .audit()
+                .refused(tick, None, None, "write save", &error);
+            failures.push(Failure {
+                what: said!(
+                    "the `{}` save of round {} could not be written",
+                    boundary.name(),
+                    round
+                ),
+                cause: Some(error.said()),
+            });
+            self.append(surface, failures);
+        }
+    }
+
+    /// Write the `ended` save [`Writer::flush`] held back, when it holds one.
+    ///
+    /// # Errors
+    ///
+    /// As [`Writer::flush`]'s for a save that could not be written: the final
+    /// round's `sealed` save then stands.
+    fn write_held_end(&self, surface: &mut Surface) -> Result<(), Error> {
+        let Some(state) = self.held_end.take() else {
+            return Ok(());
+        };
+        let mut failures: Vec<Failure> = Vec::new();
+        self.save(surface, state, &mut failures);
         self.failed(failures)
     }
 
@@ -1874,8 +2459,10 @@ impl Writer {
 
     /// Record the dropped connections' counts in the audit log, once.
     fn record_drops(&self, surface: &mut Surface) {
-        if !self.drops_recorded.replace(true) {
-            self.drops.record(surface);
+        if !self.drops_recorded.replace(true)
+            && let Some(drops) = &self.drops
+        {
+            drops.record(surface);
         }
     }
 
@@ -1954,17 +2541,16 @@ impl Writer {
         self.failed(failures)
     }
 
-    /// Stop on `error`: count the dropped connections into the audit log
-    /// (once) and write it, unless it is already broken, and leave the error
-    /// where every connection's door answers with it
-    /// ([`RemoteDoor::after_the_surface`]). Returns the error the host stops
-    /// with, which names the audit log too when only now its last lines
-    /// could not be written.
-    fn stop(&self, surface: &mut Surface, error: Error, stopped: &OnceLock<HostStopped>) -> Error {
+    /// The audit log's last lines for a host stopping on `error`: the dropped
+    /// connections' counts (once, where the host has connections) and
+    /// whatever is pending, unless the log is already broken. Returns the
+    /// error the host stops with, which names the audit log too when only now
+    /// its last lines could not be written.
+    fn last_lines(&self, surface: &mut Surface, error: Error) -> Error {
         self.record_drops(surface);
         let mut failures: Vec<Failure> = Vec::new();
         self.append(surface, &mut failures);
-        let error = match failures.first() {
+        match failures.first() {
             None => error,
             Some(lost) => Error::internal(said!(
                 "{}; and the audit log's last lines could not be written{}",
@@ -1974,7 +2560,17 @@ impl Writer {
                     None => said!(""),
                 }
             )),
-        };
+        }
+    }
+
+    /// Stop on `error`: count the dropped connections into the audit log
+    /// (once) and write it, unless it is already broken, and leave the error
+    /// where every connection's door answers with it
+    /// ([`RemoteDoor::after_the_surface`]). Returns the error the host stops
+    /// with, which names the audit log too when only now its last lines
+    /// could not be written.
+    fn stop(&self, surface: &mut Surface, error: Error, stopped: &OnceLock<HostStopped>) -> Error {
+        let error = self.last_lines(surface, error);
         // Set once: only this thread sets it, and only on its way out. The
         // tokens go with it: the surface serves nothing more.
         let tick = surface.time().tick;
@@ -2244,7 +2840,9 @@ mod tests {
             largest: largest_save(&config, &rules_json).expect("a bound"),
             config,
             rules_hash: 0,
-            drops: Arc::new(Drops::default()),
+            drops: Some(Arc::new(Drops::default())),
+            hold_end: false,
+            held_end: std::cell::RefCell::new(None),
             drops_recorded: std::cell::Cell::new(false),
             audit_broken: std::cell::Cell::new(false),
         };
@@ -2273,6 +2871,93 @@ mod tests {
             error.message()
         );
         let _cleaned = std::fs::remove_dir_all(&root);
+    }
+
+    /// An external seat's host that dies in a Push leaves the `sealed` save
+    /// its seals made, and the process that takes the match up replays that
+    /// Push as it opens: the round's chain is byte for byte the chain of a
+    /// host that never died, and the seat lands in the next Lull.
+    #[test]
+    fn an_external_match_that_died_in_a_push_replays_it_as_it_is_taken_up() {
+        use super::{ConfigLine, External, NoOperators, Setup};
+        let rules_json = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("rules")
+                .join("rules.v1.json"),
+        )
+        .expect("the shipped rules table");
+        let config = Config {
+            match_id: String::from("m-external-died"),
+            seed: 7,
+            seats: 2,
+            human_seat: Some(0),
+            segment_lengths_ms: vec![1_000],
+            round_limit: 2,
+            preset: Preset::Custom,
+        };
+        let setup = || Setup {
+            rules_json: rules_json.clone(),
+            library: None,
+            operators: Box::new(NoOperators),
+        };
+        let ready = crate::rpc::request_text(
+            &pharmakos_proto::json::Json::Number(String::from("1")),
+            "set_ready",
+            pharmakos_proto::json::Json::Object(Vec::new()),
+        );
+        let play = |name: &str, dies: bool| -> String {
+            let root = std::env::temp_dir()
+                .join("pharmakos-gateway-tests")
+                .join("serve")
+                .join(format!("{name}-{}", std::process::id()));
+            let _fresh = std::fs::remove_dir_all(&root);
+            let new = ConfigLine {
+                config: config.clone(),
+                resume: false,
+            };
+            let mut external = External::open(setup(), &root, &new).expect("the match opens");
+            assert!(external.call(&ready).get("result").is_some());
+            let external = if dies {
+                // The seals are made and their save is on disk; then nothing:
+                // no step, no close.
+                assert!(external.surface.begin_push().expect("the Push begins"));
+                external
+                    .writer
+                    .flush(&mut external.surface)
+                    .expect("the sealed save lands");
+                drop(external);
+                let resume = ConfigLine {
+                    config: config.clone(),
+                    resume: true,
+                };
+                External::open(setup(), &root, &resume).expect("the match is taken up")
+            } else {
+                external.advance().expect("round 1 plays");
+                external
+            };
+            let time = external.surface.time();
+            assert_eq!(
+                time.phase,
+                pharmakos_proto::gp::api::v1::status::Phase::Lull
+            );
+            assert_eq!(time.round, 2);
+            external.close().expect("put down in round 2's Lull");
+            let chain = std::fs::read_to_string(
+                root.join("matches")
+                    .join(&config.match_id)
+                    .join("replay")
+                    .join("1.hashes.txt"),
+            )
+            .expect("round 1's chain");
+            let _cleaned = std::fs::remove_dir_all(&root);
+            chain
+        };
+        let whole = play("external-whole", false);
+        let died = play("external-died", true);
+        assert!(whole.lines().count() >= 20, "{whole}");
+        assert_eq!(whole, died);
     }
 
     /// The stop's words over every combination (fix pass 3, item 2): each

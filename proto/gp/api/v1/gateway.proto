@@ -381,9 +381,11 @@ message VerifyPlan {
 }
 
 // Namespace holder for the read-method budgets. Results are truncated in a
-// fixed salience order. No v1 client is a model, so nothing actually spends
-// these tokens; the budgets are kept because they are the shape the v1.1 API
-// needs (spec section 12, "Budgets").
+// fixed salience order. No client inside the v1 game is a model; the first
+// reader that spends these tokens is a program that plays the experimental
+// external seat (decisions-log item 231). The budgets are kept because they
+// are the shape the v1.1 API needs (spec section 12, "Budgets", as amended
+// after S3).
 message ReadOptions {
   Detail detail = 1;
 

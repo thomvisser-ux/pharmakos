@@ -16,9 +16,14 @@ built with `-dev` (item 228 (9) (c)). The development tags `v0.1.0-dev.<n>` shar
 ## 0.4.0-dev
 
 S4, Signals, in progress: builds from `main` between the `v0.3.0` tag and S4's first
-milestone tag. Nothing in the game has changed since 0.3.0 yet; only the version string
-differs. This section collects what lands, and the milestone's own pull request renames it to
-that tag's version.
+milestone tag. This section collects what lands, and the milestone's own pull request renames it
+to that tag's version.
+
+- **Experimental: the external seat.** `gamectl match new`, `call`, `submit`, `brief` and `serve`
+  let a program outside the game play one seat of a headless match against the built-in
+  operator, with a seat's rights and no token. The commands and their output may change in any
+  release. The game itself is unchanged: the lobby does not offer the seat, and no AI runs
+  inside the game (decisions-log item 231).
 
 ## 0.3.0
 

@@ -1583,6 +1583,23 @@ impl Surface {
         !self.seats.is_empty() && self.seats.iter().all(|seat| seat.ready)
     }
 
+    /// True when `seat` has said it is ready; false for a seat this match has
+    /// not got.
+    ///
+    /// What the external seat's host asks, through its driver
+    /// (`headless::leave_lull`, the one caller, which is why this is not
+    /// public): a
+    /// headless match has no Lull timer, so its Lull ends when the seat played
+    /// from outside says it may. One seat's flag, and nothing else of its
+    /// state: the notebook, the drafts and the submission stay behind
+    /// [`Surface::seat_state`]'s gate.
+    #[must_use]
+    pub(crate) fn seat_is_ready(&self, seat: SeatId) -> bool {
+        self.seats
+            .iter()
+            .any(|slot| slot.seat == seat && slot.ready)
+    }
+
     /// Open a Lull: carry last round's playbook forward, re-verify it against
     /// the new snapshot, and clear every ready flag.
     ///
