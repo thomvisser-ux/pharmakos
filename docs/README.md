@@ -39,6 +39,8 @@ the stage order and what each stage's definition of done is.
 | `README.md` | The index of this folder and the full precedence order. Start here. |
 | `decisions-log.md` | The primary record. Every decision with its reasoning, from the pre-spec interview through pass 6 (§2.7, items 1–45 are current). Read the precedence note above before quoting it. |
 | `handoff.md` | Session-to-session state: what is published where, what is open, what to do next. Read this first when picking the project back up. |
+| `holdfast.md` | The design of rotes and trust for S4: rotes of cards, holdfast's grades, buried cable, network access control and the last Keybearer's defeat (decisions-log item 229). |
+| `s4-plan.md` | The plan for S4 "Signals"'s first half, "the three towers" (decisions-log item 229). |
 | `co-design-gameplan-api.md` | Co-design of the playbook format, the verifier, the planning API and the editor, with its own open-questions and contradictions sections. |
 | `6c-language-investigation.md` | The multi-agent investigation into a shared plan format and script language, which ended in the v1 simplification: JSONC data, no script runtime in the game. |
 | `review-agenda-draft5.md` | The draft-5 review agenda that drove the draft-6 rewrite. Historical. |
