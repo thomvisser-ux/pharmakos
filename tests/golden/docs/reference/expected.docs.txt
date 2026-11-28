@@ -12,37 +12,42 @@ tests/golden/docs/reference/expected.docs.txt.
 
 ## Commands
 
-verify <playbook.jsonc>   inspect a playbook and print its report and report_hash
-schema [--part <name>]    print the JSON Schema a seat authors against, generated from gp.v1
-docs                      print the generated reference: the schema's shape and every diagnostic
-scenario run <file>       play a scenario headless and check its assertions on events and hashes; with --seeds, play an arm over a seed set and write a result instead
-seat doctor               check this installation and report what is wrong
-host                      serve one match to the game client over this process's stdio pipe; the lobby starts it, and it refuses a terminal
-match new --dir <dir>     experimental: start a headless match in a new folder, one seat played from outside through the commands below and every other seat built in
-match call <method>       experimental: make one gp.api.v1 call as that seat and print the answer; `set_ready` is what lets the Push play
-match submit <playbook>   experimental: submit a playbook file as that seat's orders for the round and print the verifier's report
-match brief               experimental: print what that seat is told this round, in the gateway's own words
-match serve               experimental: answer that seat's calls on this process's stdio, one JSON-RPC request a line in and one answer a line out, until standard input ends
+verify <playbook.jsonc>     inspect a playbook and print its report and report_hash
+schema [--part <name>]      print the JSON Schema a seat authors against, generated from gp.v1
+docs                        print the generated reference: the schema's shape and every diagnostic
+scenario run <file>         play a scenario headless and check its assertions on events and hashes; with --seeds, play an arm over a seed set and write a result instead
+arena <file> --seeds <file> play a scenario's seats against each other as contestants over the seed file --seeds names, every seed once from every seat, each match to its end, and write who won how often
+seat doctor                 check this installation and report what is wrong
+host                        serve one match to the game client over this process's stdio pipe; the lobby starts it, and it refuses a terminal
+match new --dir <dir>       experimental: start a headless match in a new folder, one seat played from outside through the commands below and every other seat built in
+match call <method>         experimental: make one gp.api.v1 call as that seat and print the answer; `set_ready` is what lets the Push play
+match submit <playbook>     experimental: submit a playbook file as that seat's orders for the round and print the verifier's report
+match brief                 experimental: print what that seat is told this round, in the gateway's own words
+match serve                 experimental: answer that seat's calls on this process's stdio, one JSON-RPC request a line in and one answer a line out, until standard input ends
 
 ## Options
 
--h, --help                print this help and exit 0
--V, --version             print the version of this build and exit 0
-    --root <dir>          the repository root every other path is read against (default: the working directory)
-    --part <name>         schema only: one message of gp.v1 by its lower_snake_case name, instead of the whole playbook
-    --depth <quick|full>  verify only: how deep to run the pipeline (default: full, which is what submit_plan runs)
-    --preset <probation>  verify only: verify against seat 0's opening Lull snapshot in the match the lobby opens for this preset, through the gateway, instead of the reference view
-    --format <text|json>  verify only: how verify answers: text for a person, or json, one JSON object on standard output, the verifier's own report or, where there is none, {"refusal": {"code": "failed" or "internal", "message"}}, the exit code unchanged; a usage error and an unreadable file stay on standard error (default: text)
-    --operator <easy>     scenario only: the built-in operator a `builtin` seat plays; easy, which carries the Balanced weighting, is the one this build has (default: easy)
-    --seeds <file>        scenario only: play the scenario to its end once per seed in the file, each seed replacing its map seed and the arm alternating between seats 0 and 1, and write a result instead of checking its assertions
-    --format <text|json>  scenario only: how a run over --seeds writes its result (default: text)
-    --out <path>          scenario only: the file a run over --seeds writes its result to (default: standard output)
-    --dir <dir>           match only: the match's own folder: `new` makes it, and every other match command names it; one folder, one match
-    --seed <seed>         match only: `new`: the match seed, `0x` and hex digits or decimal (default: 1)
-    --seats <n>           match only: `new`: how many seats the match has (default: 2)
-    --seat <n>            match only: `new`: the seat played from outside (default: 0)
-    --rounds <n>          match only: `new`: the round limit (default: 3, the lobby's)
-    --params <file>       match only: `call`: a file holding the call's params, one JSON object (default: no params)
+-h, --help                  print this help and exit 0
+-V, --version               print the version of this build and exit 0
+    --root <dir>            the repository root every other path is read against (default: the working directory)
+    --part <name>           schema only: one message of gp.v1 by its lower_snake_case name, instead of the whole playbook
+    --depth <quick|full>    verify only: how deep to run the pipeline (default: full, which is what submit_plan runs)
+    --preset <probation>    verify only: verify against seat 0's opening Lull snapshot in the match the lobby opens for this preset, through the gateway, instead of the reference view
+    --format <text|json>    verify only: how verify answers: text for a person, or json, one JSON object on standard output, the verifier's own report or, where there is none, {"refusal": {"code": "failed" or "internal", "message"}}, the exit code unchanged; a usage error and an unreadable file stay on standard error (default: text)
+    --operator <easy>       scenario only: the built-in operator a `builtin` seat plays; easy, which carries the Balanced weighting, is the one this build has (default: easy)
+    --seeds <file>          scenario only: play the scenario to its end once per seed in the file, each seed replacing its map seed and the arm alternating between seats 0 and 1, and write a result instead of checking its assertions
+    --format <text|json>    scenario only: how a run over --seeds writes its result (default: text)
+    --out <path>            scenario only: the file a run over --seeds writes its result to (default: standard output)
+    --operator <easy>       arena only: the built-in operator a `builtin` contestant plays (default: easy)
+    --seeds <file>          arena only: the seed file, which the arena needs: every seed is played once per rotation of the contestants over the seats, each seed replacing the scenario's map seed
+    --format <text|json>    arena only: how the arena writes its result (default: text)
+    --out <path>            arena only: the file the arena writes its result to (default: standard output)
+    --dir <dir>             match only: the match's own folder: `new` makes it, and every other match command names it; one folder, one match
+    --seed <seed>           match only: `new`: the match seed, `0x` and hex digits or decimal (default: 1)
+    --seats <n>             match only: `new`: how many seats the match has (default: 2)
+    --seat <n>              match only: `new`: the seat played from outside (default: 0)
+    --rounds <n>            match only: `new`: the round limit (default: 3, the lobby's)
+    --params <file>         match only: `call`: a file holding the call's params, one JSON object (default: no params)
 
 ## Exit codes
 

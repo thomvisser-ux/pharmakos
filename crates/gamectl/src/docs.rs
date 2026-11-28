@@ -90,7 +90,7 @@ fn heading(text: &mut String) {
 fn commands(text: &mut String) {
     text.push_str("## Commands\n\n");
     for command in COMMANDS {
-        let _ = writeln!(text, "{:<26}{}", command.usage, command.about);
+        let _ = writeln!(text, "{:<28}{}", command.usage, command.about);
     }
     // The options, from the same table `--help` prints: a review found
     // `--depth` in neither, which is a flag the reference does not know the
@@ -99,7 +99,7 @@ fn commands(text: &mut String) {
     for option in OPTIONS {
         let _ = writeln!(
             text,
-            "{:<26}{}",
+            "{:<28}{}",
             option.spelling,
             strings::option_about(option)
         );

@@ -254,6 +254,11 @@ pub struct Played {
     pub rules_hash: u64,
     /// The hunts the seats filed and launched over the whole run.
     pub hunts: Hunts,
+    /// The plan fingerprint of what each `playbook` or `sealed` seat sealed
+    /// in the last round sealed, by seat, as the gateway's seal carries it
+    /// (`Sealed::plan_fingerprint`): what an arena result names a playbook
+    /// contestant's text by.
+    pub fingerprints: BTreeMap<u8, u64>,
 }
 
 impl Played {
@@ -289,7 +294,10 @@ pub fn command(root: &Path, source: &Path, options: &RunOptions) -> Result<Strin
     if options.operator.is_some() {
         let scenario = crate::scenario::load(root, source)?;
         if builtin_seats(&scenario).is_empty() {
-            return Err(Failure::input(strings::operator_unused(&scenario.source)));
+            return Err(Failure::input(strings::operator_unused(
+                "scenario run",
+                &scenario.source,
+            )));
         }
     }
     run(root, source)
@@ -382,8 +390,31 @@ pub struct Audited {
 ///
 /// As [`play`], and [`Exit::Failed`] for a playbook `submit_plan` refused.
 pub fn play_to_end(root: &Path, scenario: &Scenario) -> Result<(Played, Ending), Failure> {
+    play_to_end_for(root, scenario, ToEnd::Nightly)
+}
+
+/// Whose run a match played to its end belongs to, which is whose words a
+/// refused playbook is said in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ToEnd {
+    /// A run over a seed file: the playbook is the nightly's arm.
+    Nightly,
+    /// The arena: the playbook is a contestant's.
+    Arena,
+}
+
+/// [`play_to_end`], for the run `whose` names.
+///
+/// # Errors
+///
+/// As [`play_to_end`].
+pub fn play_to_end_for(
+    root: &Path,
+    scenario: &Scenario,
+    whose: ToEnd,
+) -> Result<(Played, Ending), Failure> {
     let mut ending = None;
-    let played = play_until(root, scenario, Until::MatchEnd(&mut ending))?;
+    let played = play_until(root, scenario, Until::MatchEnd(&mut ending, whose))?;
     let ending = ending.ok_or_else(|| {
         Failure::internal("a match played to its end did not report how it ended")
     })?;
@@ -395,7 +426,7 @@ enum Until<'a> {
     /// The file's segments, each to its full length, or the run fails.
     Segments,
     /// The match's end, wherever the sim puts it; the ending goes here.
-    MatchEnd(&'a mut Option<Ending>),
+    MatchEnd(&'a mut Option<Ending>, ToEnd),
 }
 
 fn play_until(root: &Path, scenario: &Scenario, mut until: Until<'_>) -> Result<Played, Failure> {
@@ -438,6 +469,7 @@ fn play_until(root: &Path, scenario: &Scenario, mut until: Until<'_>) -> Result<
         notes: Vec::new(),
         rules_hash,
         hunts: Hunts::default(),
+        fingerprints: BTreeMap::new(),
     };
     let mut seen = 0_usize;
     let mut index = 0_usize;
@@ -461,15 +493,19 @@ fn play_until(root: &Path, scenario: &Scenario, mut until: Until<'_>) -> Result<
             seats.plan(&mut surface);
         }
 
-        let nightly = matches!(until, Until::MatchEnd(_));
+        let to_end = match &until {
+            Until::Segments => None,
+            Until::MatchEnd(_, whose) => Some(*whose),
+        };
         seal_all(
             root,
             &mut surface,
             scenario,
             &tokens,
-            nightly,
+            to_end,
             &mut played.notes,
         )?;
+        read_fingerprints(&surface, scenario, &mut played.fingerprints)?;
 
         // `begin_push` opens a fresh segment feed, so the count starts again.
         let anchor = surface_tick(&surface)?;
@@ -500,7 +536,7 @@ fn play_until(root: &Path, scenario: &Scenario, mut until: Until<'_>) -> Result<
         surface.end_recap().map_err(internal)?;
         let more = match &mut until {
             Until::Segments => next_index(index)? < scenario.segments.len(),
-            Until::MatchEnd(ending) => {
+            Until::MatchEnd(ending, _) => {
                 if phase(&surface)? == MatchPhase::Ended {
                     **ending = Some(ending_of(&surface)?);
                     false
@@ -586,6 +622,9 @@ enum Refused {
     HarnessDoor,
     /// The run fails: an arm that is broken on this seed and round.
     BrokenArm,
+    /// The run fails: an arena contestant that is broken on this seed, seat
+    /// and round.
+    BrokenContestant,
     /// The run fails: a `sealed` seat's file that the door it was sealed
     /// through no longer takes, so the match it came from is not the one
     /// being played.
@@ -601,6 +640,10 @@ impl Refused {
             Refused::BrokenArm => Some(Failure::new(
                 Exit::Failed,
                 strings::nightly_arm_refused(seat, relative, round, why),
+            )),
+            Refused::BrokenContestant => Some(Failure::new(
+                Exit::Failed,
+                strings::arena_playbook_refused(seat, relative, round, why),
             )),
             Refused::BrokenReplay => Some(Failure::new(
                 Exit::Failed,
@@ -622,13 +665,19 @@ fn seal_all(
     surface: &mut Surface,
     scenario: &Scenario,
     tokens: &[Token],
-    nightly: bool,
+    to_end: Option<ToEnd>,
     notes: &mut Vec<String>,
 ) -> Result<(), Failure> {
     for (seat, token) in scenario.seats.iter().zip(tokens) {
         let (relative, refused) = match &seat.kind {
-            SeatKind::Playbook(relative) if nightly => (relative.clone(), Refused::BrokenArm),
-            SeatKind::Playbook(relative) => (relative.clone(), Refused::HarnessDoor),
+            SeatKind::Playbook(relative) => (
+                relative.clone(),
+                match to_end {
+                    None => Refused::HarnessDoor,
+                    Some(ToEnd::Nightly) => Refused::BrokenArm,
+                    Some(ToEnd::Arena) => Refused::BrokenContestant,
+                },
+            ),
             SeatKind::Sealed(folder) => {
                 (sealed_file(folder, round(surface)?), Refused::BrokenReplay)
             }
@@ -641,6 +690,41 @@ fn seal_all(
         let note = strings::scenario_harness_seal(seat.seat, relative, &codes);
         if !notes.contains(&note) {
             notes.push(note);
+        }
+    }
+    Ok(())
+}
+
+/// Read the fingerprint of what each `playbook` and `sealed` seat has sealed
+/// this round, off the gateway's own seal.
+///
+/// A `playbook` seat seals one file every round, so a round whose
+/// fingerprint differs from an earlier round's is the file changing while the
+/// match played, and the run is refused: a run is a claim about one text for
+/// each such seat. A `sealed` seat seals a file a round, and its last is
+/// kept.
+fn read_fingerprints(
+    surface: &Surface,
+    scenario: &Scenario,
+    fingerprints: &mut BTreeMap<u8, u64>,
+) -> Result<(), Failure> {
+    for seat in &scenario.seats {
+        if matches!(seat.kind, SeatKind::Playbook(_) | SeatKind::Sealed(_)) {
+            let id = SeatId::new(seat.seat);
+            let sealed = surface
+                .sealed_plan(Subject::Seat(id), id)
+                .map_err(internal)?;
+            let now = sealed.plan_fingerprint();
+            let before = fingerprints.insert(seat.seat, now);
+            if let (SeatKind::Playbook(relative), Some(before)) = (&seat.kind, before)
+                && before != now
+            {
+                return Err(Failure::input(strings::scenario_playbook_changed(
+                    seat.seat,
+                    relative,
+                    round(surface)?,
+                )));
+            }
         }
     }
     Ok(())
@@ -1417,6 +1501,7 @@ mod tests {
             notes: Vec::new(),
             rules_hash: 0,
             hunts: Hunts::default(),
+            fingerprints: std::collections::BTreeMap::new(),
         }
     }
 

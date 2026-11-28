@@ -117,7 +117,7 @@ fn the_arms_are_the_whole_set() {
     );
     for arm in ARMS {
         let loaded = scenario::load(&root(), Path::new(arm)).expect("a valid arm");
-        assert!(loaded.nightly, "{arm} is read as an arm");
+        assert_eq!(loaded.home, scenario::Home::Arm, "{arm} is read as an arm");
     }
     assert_eq!(ARMS.len(), ARMS_PLAYED, "every arm has its own round test");
 }
@@ -458,7 +458,7 @@ fn the_reader_holds_an_arm_to_an_arms_rules() {
     let dir = scratch_root("plain", &text);
     let loaded = scenario::load(&dir, Path::new("scenarios/nightly/doctored.scenario.jsonc"))
         .expect("the arm as committed");
-    assert!(loaded.nightly);
+    assert_eq!(loaded.home, scenario::Home::Arm);
     // And the same text outside scenarios/nightly/ is an ordinary scenario,
     // which must carry a chain.
     let elsewhere = dir.join("elsewhere.scenario.jsonc");

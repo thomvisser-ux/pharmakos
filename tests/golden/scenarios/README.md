@@ -44,10 +44,35 @@ tests/golden/scenarios/<name>/expected.events.txt   the event log its producing
 tests/golden/scenarios/nightly-result/expected.result.json
                                                     the nightly result's shape
                                                     (S2's `night`; below)
+tests/golden/scenarios/arena-result/expected.result.json
+                                                    the arena result's shape
+                                                    (item 233; below)
 ```
 
-**S2's `night` added `nightly-result/expected.result.json`**, the one golden
-here that is not a chain: the JSON result (`pharmakos.nightly-result.v1`) that
+**Item 233 added `arena-result/expected.result.json`**, the second golden here
+that is neither a hash chain nor an event log: the JSON result
+(`pharmakos.arena-result.v1`) that `gamectl arena <file> --seeds <file>
+--format json` writes, for the match-up
+`scenarios/arena/three-way.scenario.jsonc` (Easy, the placeholder playbook and
+the safe playbook) over `scenarios/nightly/fixture/two.seeds.txt`: six
+matches, each seed under each of the three rotations.
+`crates/gamectl/tests/arena.rs` produces it and compares it in the same test.
+It holds the contestants (each its number and its kind; a playbook's path and
+`plan_fingerprint`, the fingerprint of what it sealed; a built-in contestant's
+`operator`); a match a line, with the seed, `rotation`, `contestant_by_seat`
+(at each seat's index, the contestant that sat there), `winners` (seats, as
+the nightly result's are), `winning_contestants`, the end reason, the end
+tick, the rounds, `launches` and `hunts_unlaunched` by seat as the nightly
+result has them, and the audit's lines by seat; and a standing a contestant,
+whose `win_rate_percent` is `wins x 100 / matches` rounded down and whose
+`wins_by_seat` splits the wins by seat. **It moves** when the format moves (a
+contract change, AGENTS.md section 5), or when any of the six matches ends
+differently or the playbook's fingerprint moves: the placeholder playbook,
+Easy (`crates/operator`), the template library, the rules table (whose hash it
+carries) or the seeds.
+
+**S2's `night` added `nightly-result/expected.result.json`**, the first golden
+here that is neither a hash chain nor an event log: the JSON result (`pharmakos.nightly-result.v1`) that
 `gamectl scenario run <arm> --seeds <file> --format json` writes, for a
 two-seed run of `scenarios/nightly/fixture/result-golden.scenario.jsonc` over
 `scenarios/nightly/fixture/two.seeds.txt`. `crates/gamectl/tests/nightly.rs`

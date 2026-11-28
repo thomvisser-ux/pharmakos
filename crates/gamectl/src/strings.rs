@@ -93,11 +93,11 @@ pub fn help() -> String {
     let mut text =
         format!("{BINARY} — {TAGLINE}\n\nusage: {BINARY} <command> [options]\n\ncommands:\n");
     for command in COMMANDS {
-        let _ = writeln!(text, "  {:<26}{}", command.usage, command.about);
+        let _ = writeln!(text, "  {:<28}{}", command.usage, command.about);
     }
     text.push_str("\noptions:\n");
     for option in OPTIONS {
-        let _ = writeln!(text, "  {:<26}{}", option.spelling, option_about(option));
+        let _ = writeln!(text, "  {:<28}{}", option.spelling, option_about(option));
     }
     text.push_str("\nexit codes:\n");
     for (code, meaning) in Exit::ALL {
@@ -1153,10 +1153,10 @@ pub fn nightly_layout(path: &str) -> String {
 
 /// `--operator` given for a scenario that seats no `builtin` seat.
 #[must_use]
-pub fn operator_unused(path: &str) -> String {
+pub fn operator_unused(command: &str, path: &str) -> String {
     let path = pharmakos_proto::json::grammar::escaped(path);
     format!(
-        "{BINARY} scenario run: `--operator` names the operator a `builtin` seat plays, and \
+        "{BINARY} {command}: `--operator` names the operator a `builtin` seat plays, and \
          `{path}` seats none. It is refused rather than ignored."
     )
 }
@@ -1180,6 +1180,63 @@ pub fn result_unwritable(path: &str, why: &str) -> String {
 pub fn result_written(path: &str, seeds: usize, wins: usize) -> String {
     let path = pharmakos_proto::json::grammar::escaped(path);
     format!("{seeds} seed(s) played, the arm the sole winner of {wins}; the result is in `{path}`.")
+}
+
+// ---------------------------------------------------------------------------
+// arena (decisions-log item 233)
+// ---------------------------------------------------------------------------
+
+/// A scenario whose seats are not an arena's contestants.
+#[must_use]
+pub fn arena_layout(path: &str) -> String {
+    let path = pharmakos_proto::json::grammar::escaped(path);
+    format!(
+        "{path}: the arena plays a scenario's seats against each other as contestants, so the \
+         scenario seats two or three, each a `playbook`, a `builtin` or a `safe` seat. A `sealed` \
+         seat is no contestant: its files are one match's, and belong to that match's seed."
+    )
+}
+
+/// A contestant's playbook that `submit_plan` refused in an arena match.
+/// An arena result is a claim about matches a player could have played, so
+/// the harness door is not taken.
+#[must_use]
+pub fn arena_playbook_refused(seat: u8, path: &str, round: u32, codes: &str) -> String {
+    let path = pharmakos_proto::json::grammar::escaped(path);
+    format!(
+        "seat {seat}'s playbook `{path}` was refused by `submit_plan` in round {round} ({codes}). \
+         The arena plays every playbook through the verifier's door and never the harness's, so \
+         this contestant is broken on this seed and seat, and the run has no result."
+    )
+}
+
+/// A `playbook` seat whose file sealed a different text in a later round of
+/// one match.
+#[must_use]
+pub fn scenario_playbook_changed(seat: u8, path: &str, round: u32) -> String {
+    let path = pharmakos_proto::json::grammar::escaped(path);
+    format!(
+        "seat {seat}'s playbook `{path}` sealed a different text in round {round} than in an \
+         earlier round, so the file changed while the match played. A run plays one text for \
+         each `playbook` seat; run it again."
+    )
+}
+
+/// A contestant whose playbook sealed two different texts in one arena run.
+#[must_use]
+pub fn arena_playbook_changed(contestant: usize) -> String {
+    format!(
+        "contestant {contestant}'s playbook sealed a different text in this match than in an \
+         earlier one of this run, so its file changed while the arena played. A result measures \
+         one text for each contestant; run it again."
+    )
+}
+
+/// The line the arena prints when its result went to a file.
+#[must_use]
+pub fn arena_written(path: &str, matches: usize) -> String {
+    let path = pharmakos_proto::json::grammar::escaped(path);
+    format!("{matches} match(es) played; the result is in `{path}`.")
 }
 
 /// One `left_out` entry of a refused seal on `gamectl scenario run`'s line

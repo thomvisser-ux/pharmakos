@@ -42,6 +42,7 @@
 //! pointer — the same convention the verifier's diagnostic catalogue uses, so a
 //! scenario failure reads like every other failure in the project.
 
+pub mod arena;
 pub mod nightly;
 pub mod run;
 pub mod seeds;
@@ -76,6 +77,29 @@ pub const DEFAULT_RULES: &str = "rules/rules.v1.json";
 /// `xtask/src/scenario.rs` holds the same rule, and its `collect_played` leaves
 /// these files out of every replay against a golden.
 pub const NIGHTLY_DIR: [&str; 2] = ["scenarios", "nightly"];
+
+/// Where the arena's match-ups live, as path components from the repository
+/// root (decisions-log item 233).
+///
+/// A match-up is an ordinary scenario file whose seats are the contestants
+/// `gamectl arena` plays against each other. Like an arm it is read as what it
+/// is from where it lives, and it carries **no `hash_chain_equals`**, since
+/// the arena replaces its map seed. Its seats are two or three, each a
+/// `playbook`, a `builtin` or a `safe` seat. `xtask/src/scenario.rs` holds the
+/// same rule, and its `collect_played` leaves these files out of every replay
+/// against a golden.
+pub const ARENA_DIR: [&str; 2] = ["scenarios", "arena"];
+
+/// What a scenario file is, read from where it lives.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Home {
+    /// A committed scenario: it asserts on events and on its hash chain.
+    Scenario,
+    /// A nightly arm, under [`NIGHTLY_DIR`].
+    Arm,
+    /// An arena match-up, under [`ARENA_DIR`].
+    MatchUp,
+}
 
 /// The assertion vocabulary, in full.
 ///
@@ -246,10 +270,12 @@ pub struct Scenario {
     /// One or more segments, in order.
     pub segments: Vec<Segment>,
     /// At least one assertion, and at least one of each kind -- except for a
-    /// nightly arm, which asserts on events alone ([`NIGHTLY_DIR`]).
+    /// nightly arm and an arena match-up, which are played over seeds that
+    /// replace their own and assert on events alone ([`Home`]).
     pub assertions: Vec<Assertion>,
-    /// Whether the file is a nightly arm, under [`NIGHTLY_DIR`].
-    pub nightly: bool,
+    /// What the file is: a committed scenario, a nightly arm or an arena
+    /// match-up.
+    pub home: Home,
 }
 
 impl Scenario {
@@ -356,8 +382,8 @@ pub fn load(root: &Path, source: &Path) -> Result<Scenario, Failure> {
             ))
         })?;
 
-    let nightly = is_nightly(root, source);
-    let scenario = read(root, &display, nightly, &json, &mut problems);
+    let home = home_of(root, source);
+    let scenario = read(root, &display, home, &json, &mut problems);
     if problems.0.is_empty() {
         return scenario.ok_or_else(|| {
             Failure::internal("a scenario with no problems did not come back read")
@@ -391,30 +417,40 @@ fn check_bytes(bytes: &[u8], problems: &mut Problems) {
     }
 }
 
-/// Whether `source` names a file under [`NIGHTLY_DIR`], read from the
-/// repository root. A path outside the root (a test's scratch copy) is not an
-/// arm.
-fn is_nightly(root: &Path, source: &Path) -> bool {
+/// What the file `source` names is, by where it lives from the repository
+/// root: under [`NIGHTLY_DIR`] an arm, under [`ARENA_DIR`] a match-up, and
+/// anywhere else, a path outside the root (a test's scratch copy) included,
+/// a scenario.
+fn home_of(root: &Path, source: &Path) -> Home {
     let relative = if source.is_absolute() {
         match source.strip_prefix(root) {
             Ok(relative) => relative,
-            Err(_) => return false,
+            Err(_) => return Home::Scenario,
         }
     } else {
         source
     };
-    let mut parts = relative
-        .components()
-        .filter(|part| !matches!(part, std::path::Component::CurDir));
-    NIGHTLY_DIR
-        .iter()
-        .all(|wanted| parts.next().is_some_and(|part| part.as_os_str() == *wanted))
+    let under = |folder: [&str; 2]| {
+        let mut parts = relative
+            .components()
+            .filter(|part| !matches!(part, std::path::Component::CurDir));
+        folder
+            .iter()
+            .all(|wanted| parts.next().is_some_and(|part| part.as_os_str() == *wanted))
+    };
+    if under(NIGHTLY_DIR) {
+        Home::Arm
+    } else if under(ARENA_DIR) {
+        Home::MatchUp
+    } else {
+        Home::Scenario
+    }
 }
 
 fn read(
     root: &Path,
     source: &str,
-    nightly: bool,
+    home: Home,
     json: &Json,
     problems: &mut Problems,
 ) -> Option<Scenario> {
@@ -448,14 +484,16 @@ fn read(
     let (seed, generator) = read_map(json, problems);
     let rules = read_rules(root, json, problems);
     let seats = read_seats(root, json, problems);
-    if nightly {
-        check_arm_seats(&seats, problems);
+    match home {
+        Home::Scenario => {}
+        Home::Arm => check_arm_seats(&seats, problems),
+        Home::MatchUp => check_match_up_seats(&seats, problems),
     }
     let segments = read_segments(json, problems);
     check_sealed_rounds(root, &seats, segments.len(), problems);
     let round_limit = read_match_settings(json, segments.len(), problems);
     let segment_lengths_ms = read_ladder(json, &segments, problems);
-    let assertions = read_assertions(root, json, nightly, problems);
+    let assertions = read_assertions(root, json, home, problems);
 
     Some(Scenario {
         source: source.to_owned(),
@@ -469,7 +507,7 @@ fn read(
         seats,
         segments,
         assertions,
-        nightly,
+        home,
     })
 }
 
@@ -568,6 +606,22 @@ fn check_arm_seats(seats: &[Seat], problems: &mut Problems) {
             "a nightly arm seats exactly two seats: one `playbook` seat, the arm, and one \
              `builtin` seat, Easy, which a run over a seed file alternates between seat 0 and \
              seat 1 (S2's plan, decision 29)",
+        );
+    }
+}
+
+/// An arena match-up seats two or three contestants, none of them `sealed`
+/// (decisions-log item 233): what [`arena::contestants_of`] takes.
+fn check_match_up_seats(seats: &[Seat], problems: &mut Problems) {
+    let sealed = seats
+        .iter()
+        .any(|seat| matches!(seat.kind, SeatKind::Sealed(_)));
+    if seats.len() < 2 || sealed {
+        problems.at(
+            "/seats",
+            "an arena match-up seats two or three contestants, each a `playbook`, a \
+             `builtin` or a `safe` seat: a `sealed` seat's files are one match's, and belong to \
+             that match's seed (decisions-log item 233)",
         );
     }
 }
@@ -895,7 +949,7 @@ fn read_match_settings(json: &Json, segments: usize, problems: &mut Problems) ->
 fn read_assertions(
     root: &Path,
     json: &Json,
-    nightly: bool,
+    home: Home,
     problems: &mut Problems,
 ) -> Vec<Assertion> {
     let Some(Json::Array(assertions)) = json.get("assertions") else {
@@ -949,11 +1003,17 @@ fn read_assertions(
                     read.push(fired);
                 }
             }
-            "hash_chain_equals" if nightly => problems.at(
+            "hash_chain_equals" if home == Home::Arm => problems.at(
                 &format!("{base}/assert"),
                 "a nightly arm carries no hash chain: a run over a seed file replaces its map \
                  seed, so a chain for the file's own seed would pin a match the nightly never \
                  plays (S2's plan, E20)",
+            ),
+            "hash_chain_equals" if home == Home::MatchUp => problems.at(
+                &format!("{base}/assert"),
+                "an arena match-up carries no hash chain: the arena replaces its map seed, so a \
+                 chain for the file's own seed would pin a match the arena never plays \
+                 (decisions-log item 233)",
             ),
             "hash_chain_equals" => {
                 unknown_keys(&base, members, HASH_CHAIN_KEYS, problems);
@@ -973,14 +1033,29 @@ fn read_assertions(
         }
     }
 
-    if nightly && !assertions.is_empty() && !on_events {
+    if !assertions.is_empty() {
+        check_kinds_asserted(home, on_events, on_hashes, problems);
+    }
+    read
+}
+
+/// What a file's assertions must cover between them, by what the file is.
+fn check_kinds_asserted(home: Home, on_events: bool, on_hashes: bool, problems: &mut Problems) {
+    if home == Home::Arm && !on_events {
         problems.at(
             "/assertions",
             "a nightly arm asserts on events: its run on its own seed checks them, and it carries \
              no hash chain (S2's plan, E20)",
         );
     }
-    if !nightly && !assertions.is_empty() && (!on_events || !on_hashes) {
+    if home == Home::MatchUp && !on_events {
+        problems.at(
+            "/assertions",
+            "an arena match-up asserts on events: `scenario run` on its own seed checks them, \
+             and it carries no hash chain (decisions-log item 233)",
+        );
+    }
+    if home == Home::Scenario && (!on_events || !on_hashes) {
         problems.at(
             "/assertions",
             "a scenario asserts on events AND on the hash chain (AGENTS.md §10 item 4): events \
@@ -988,7 +1063,6 @@ fn read_assertions(
              and only the pair proves it did the right thing reproducibly",
         );
     }
-    read
 }
 
 fn read_hash_chain(

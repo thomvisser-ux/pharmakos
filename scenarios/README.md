@@ -105,6 +105,7 @@ scenarios/
   <set>/<name>/seat-<n>/<round>.jsonc   what a `sealed` seat seals, round by round
   nightly/<arm>.scenario.jsonc     a nightly adversarial arm (nightly/README.md)
   nightly/seeds.txt                the seed set the nightly plays the arms over
+  arena/<name>.scenario.jsonc      an arena match-up (below)
 tests/golden/scenarios/<name>/     the hash chains and event logs it asserts on
 ```
 
@@ -119,6 +120,27 @@ is the one exception to the events-and-hashes rule below, and it seats one
 arm and plays none (`xtask/src/scenario.rs`' `collect_played`), and
 `.github/workflows/nightly-scenarios.yml` plays them over the seed set with
 `gamectl scenario run --seeds`.
+
+**`scenarios/arena/` holds match-ups** (decisions-log item 233). A match-up
+is a file in this format whose seats are the contestants `gamectl arena <file>
+--seeds <file>` plays against each other, and like an arm it has rules of its
+own, read from where it lives: it carries **no `hash_chain_equals`**, because
+the arena replaces its map seed, and it seats two or three seats, each a
+`playbook`, a `builtin` or a `safe` seat (a `sealed` seat's files belong to
+one match's seed). It asserts on events, which `gamectl scenario run` checks
+on the file's own seed. The `scenario` step validates every match-up and plays
+none; `crates/gamectl/tests/arena.rs` lists them and plays each on its own
+seed.
+
+The arena takes any file in this format whose seats are contestants, a
+nightly arm included. Every seed of the seed file replaces `map.seed`, and
+each seed is played once per rotation of the contestants over the seats
+(rotation `r` seats contestant `i`, its place in `seats`, on seat `(i + r) mod
+n`), so every contestant plays every seat on every seed. Each match is played
+to its end under the file's rules, `segment_lengths_ms` and `round_limit`; the
+file's assertions and golden are not read. The result says who won how often
+and from which seat (`--format json`: `pharmakos.arena-result.v1`). It is
+development evidence, never proof, and it has no alarm band.
 
 ## The file
 
