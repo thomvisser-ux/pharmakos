@@ -72,7 +72,7 @@
 # root Cargo.toml and .cargo/ for the release profiles the package builds with. It also
 # falls back when GitHub reports the PR as BEHIND (the ruleset requiring up-to-date
 # branches). A base that moved only by prose (docs/, .claude/, AGENTS.md, CLAUDE.md, a
-# top-level *.md other than CHANGELOG.md) needs no check.
+# top-level *.md, less the files a test reads and every playbook: NOT_PROSE below) needs no check.
 #
 # The train runs only while each lane it names is idle: no lane session, fix pass or
 # Auto-fix fix is working in that lane's worktree or pushing its branch (the main session's
@@ -232,19 +232,21 @@ wait_for_head() {
 # quoted, and --no-renames so both sides of a rename are listed.
 paths_between() { git diff --no-renames --name-only -z "$1" "$2" | tr '\0' '\n'; }
 
-# Prose: nothing the suite reads (decisions-log item 115 (4)'s allow-list). CHANGELOG.md is a
-# top-level *.md the suite does read (the version test, item 228), so it is not prose.
+# Prose: nothing the suite reads (decisions-log item 115 (4)'s allow-list), less NOT_PROSE:
+# the files a test reads and every playbook (item 230; xtask/src/scope.rs holds this line to its
+# own list). Case is folded, as two of the three operating systems fold it.
 PROSE='^(docs/|\.claude/|AGENTS\.md$|CLAUDE\.md$|[^/]+\.md$)'
+NOT_PROSE='^(CHANGELOG\.md|docs/design/s3-plan\.md|.*\.jsonc)$'
 # True when a path list (one per line) names anything but prose; an empty list names nothing.
-has_non_prose() { [ -n "$1" ] && { grep -qvE "$PROSE" <<<"$1" || grep -qxF "CHANGELOG.md" <<<"$1"; }; }
+has_non_prose() { [ -n "$1" ] && { grep -qvE "$PROSE" <<<"$1" || grep -qiE "$NOT_PROSE" <<<"$1"; }; }
 # Output only the three legs produce, each on its own OS, or that no local run executes.
 # Its paths after the golden areas are what ships in the zip, or what builds it, which only
 # CI's package and clean-launch jobs exercise, because the local check runs `cargo xtask ci`
 # and never `cargo xtask package`. The root Cargo.toml and .cargo/ are on it for their
 # profiles: the package builds the client with [profile.release-client] and gamectl with
-# --release, and no local run builds either profile. CHANGELOG.md is on it: the zip ships its
-# bytes, though the manifest pins only its path.
-MATRIX_ONLY='^(crates/sim/|crates/mesher/|crates/client-gdext/|godot/|\.github/|tests/golden/(determinism|scenarios|pathing|mapgen|mesher|vista)/|library/|rules/|packaging/|LICENSES/|REUSE\.toml$|xtask/src/(package|zip)\.rs$|tests/golden/package/|CHANGELOG\.md$|Cargo\.toml$|\.cargo/)'
+# --release, and no local run builds either profile. CHANGELOG.md is not on it: the zip's
+# manifest pins its path and not its bytes, and the local check runs the one test that reads it.
+MATRIX_ONLY='^(crates/sim/|crates/mesher/|crates/client-gdext/|godot/|\.github/|tests/golden/(determinism|scenarios|pathing|mapgen|mesher|vista)/|library/|rules/|packaging/|LICENSES/|REUSE\.toml$|xtask/src/(package|zip)\.rs$|tests/golden/package/|Cargo\.toml$|\.cargo/)'
 
 # What the train checked for the current lane (set by verify_lane).
 checked_head="" checked_main="" checked_tree=""

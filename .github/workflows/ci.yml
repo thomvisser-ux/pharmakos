@@ -49,8 +49,8 @@
 # `cargo xtask ci-scope` right after its checkout and toolchain steps, in a step with
 # `id: scope`. It answers
 # `prose_only=true` only for a `pull_request` whose merge commit changes nothing but
-# `docs/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**` and top-level `*.md` other than
-# `CHANGELOG.md` (the zip ships it and the version test reads it), and false on every
+# `docs/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**` and top-level `*.md`, less the files a test
+# reads and every playbook (`READ_BY_THE_SUITE` and `DATA_EXTENSION` in scope.rs), and false on every
 # other event and on any error (the rules and their tests are in xtask/src/scope.rs).
 #
 # The rules for editing this file around it:
@@ -240,9 +240,9 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.os }}" = "ubuntu-latest" ] && [ "${{ matrix.shard }}" = "1" ]; then
-            echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so \`cargo xtask ci\` did not run on this shard: it runs the \`reuse\` step alone, and the DCO job walks the sign-offs. The full suite runs on main's push (decisions-log item 115 (4))."
+            echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md, less what a test reads), so \`cargo xtask ci\` did not run on this shard: it runs the \`reuse\` step alone, and the DCO job walks the sign-offs. The full suite runs on main's push (decisions-log item 115 (4))."
           else
-            echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so \`cargo xtask ci\` did not run on this shard; the ubuntu leg's shard 1 runs the \`reuse\` step and the DCO job walks the sign-offs. The full suite runs on main's push (decisions-log item 115 (4))."
+            echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md, less what a test reads), so \`cargo xtask ci\` did not run on this shard; the ubuntu leg's shard 1 runs the \`reuse\` step and the DCO job walks the sign-offs. The full suite runs on main's push (decisions-log item 115 (4))."
           fi
 
       - name: Make `main` available locally
@@ -986,7 +986,7 @@ jobs:
       - name: Only prose changed, so the vista does not run
         if: steps.scope.outputs.prose_only == 'true'
         shell: bash
-        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so the vista render did not run in this job. It runs in full on main's push (decisions-log item 115 (4))."
+        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md, less what a test reads), so the vista render did not run in this job. It runs in full on main's push (decisions-log item 115 (4))."
 
       - name: Cache cargo registry and target
         if: steps.scope.outputs.prose_only != 'true'
@@ -1140,7 +1140,7 @@ jobs:
       - name: Only prose changed, so the client check does not run
         if: steps.scope.outputs.prose_only == 'true'
         shell: bash
-        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so the client check and the watch run did not run in this job. It runs in full on main's push (decisions-log item 115 (4))."
+        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md, less what a test reads), so the client check and the watch run did not run in this job. It runs in full on main's push (decisions-log item 115 (4))."
 
       - name: Cache cargo registry and target
         if: steps.scope.outputs.prose_only != 'true'
@@ -1444,7 +1444,7 @@ jobs:
       - name: Only prose changed, so nothing is measured
         if: steps.scope.outputs.prose_only == 'true'
         shell: bash
-        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so the perf alarms did not run in this job. They run in full on main's push (decisions-log item 115 (4))."
+        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md, less what a test reads), so the perf alarms did not run in this job. They run in full on main's push (decisions-log item 115 (4))."
 
       # An alarm, not a gate: each step continues on error, so even a failure to build
       # cannot turn this job red. Each step's own timeout sits below the job's: a job that
@@ -1568,7 +1568,7 @@ jobs:
       - name: Only prose changed, so nothing is measured
         if: steps.scope.outputs.prose_only == 'true'
         shell: bash
-        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so the G3' budget did not run in this job. It runs in full on main's push (decisions-log item 115 (4))."
+        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md, less what a test reads), so the G3' budget did not run in this job. It runs in full on main's push (decisions-log item 115 (4))."
 
       - name: cargo xtask g3-budget
         if: steps.scope.outputs.prose_only != 'true'
@@ -1636,7 +1636,7 @@ jobs:
       - name: Only prose changed, so nothing is measured
         if: steps.scope.outputs.prose_only == 'true'
         shell: bash
-        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so the authoring budgets did not run in this job. They run in full on main's push (decisions-log item 115 (4))."
+        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md, less what a test reads), so the authoring budgets did not run in this job. They run in full on main's push (decisions-log item 115 (4))."
 
       - name: cargo xtask p3-budget
         if: steps.scope.outputs.prose_only != 'true'
@@ -1719,7 +1719,7 @@ jobs:
       - name: Only prose changed, so nothing is packaged
         if: steps.scope.outputs.prose_only == 'true'
         shell: bash
-        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so no zip was built in this job, and its clean-launch job has nothing to launch. It runs in full on main's push (decisions-log item 115 (4))."
+        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md, less what a test reads), so no zip was built in this job, and its clean-launch job has nothing to launch. It runs in full on main's push (decisions-log item 115 (4))."
 
       - name: Install Godot 4.7.2, checked against Godot's SHA-512
         # The pinned build decisions-log item 73 names, installed as the `client` job does,
@@ -1906,7 +1906,7 @@ jobs:
       - name: Only prose changed, so nothing is packaged
         if: steps.scope.outputs.prose_only == 'true'
         shell: bash
-        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so no zip was built in this job, and its clean-launch job has nothing to launch. It runs in full on main's push (decisions-log item 115 (4))."
+        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md, less what a test reads), so no zip was built in this job, and its clean-launch job has nothing to launch. It runs in full on main's push (decisions-log item 115 (4))."
 
       - name: Install Godot 4.7.2, checked against Godot's SHA-512
         if: steps.scope.outputs.prose_only != 'true'
