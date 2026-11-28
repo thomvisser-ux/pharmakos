@@ -832,7 +832,9 @@ of that premise.
   and the agents it launches, never against a real seat (decisions-log items 86, 116 (9), 126, 141,
   152, 226, 227 and 228). **A real seat is a seat in a match that another person plays in or
   relies on, or that reads text from outside this repository. Test matches on this machine are not
-  real seats** (the owner's definition, decisions-log item 229, point 47).
+  real seats** (the owner's definition, decisions-log item 229, point 47). The owner's own
+  session's agents may therefore play the external seat in test matches on this machine (the
+  owner's answer, decisions-log item 231 (6), point 71).
 - **The external seat holds a seat's rights and nothing else** (§2; decisions-log item 231). Its
   token is minted inside the gateway and never leaves it: none is in `gamectl`, on a command line,
   on a pipe or on the disk, and no token that could move the match is minted at all. Nothing
