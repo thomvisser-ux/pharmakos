@@ -435,8 +435,9 @@ wildcard: Godot applies the exclude filter after the include filter, so a wildca
 drop the smoke check and no include could bring it back. `godot_project.rs` pins that, and
 `package` byte-scans the `.pck` for it. The Windows preset has Godot edit the executable's
 resources itself (`application/modify_resources`, no rcedit): product name and file
-description the lockup, product version `0.3.0`, file version `0.3.0.0`: `xtask/src/package.rs`'s
-`VERSION` and its numeric core, which `package.rs`'s tests hold the preset to (decisions-log item 228).
+description the lockup, the product version `xtask/src/package.rs`'s `VERSION` and the file
+version its numeric core plus `.0`, which `package.rs`'s tests hold the preset to (decisions-log
+item 228; AGENTS.md §9, "Versions and tags").
 
 Godot rewrites `export_presets.cfg` when the editor saves presets, so the file keeps no
 comment, and its PLACEHOLDERs live here:

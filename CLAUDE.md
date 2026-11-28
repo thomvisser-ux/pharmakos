@@ -119,17 +119,16 @@ session never merges, on its own word, a change to a point the decisions log res
 or to something the owner ruled; it keeps building everything else, holds that piece, and brings
 the questions to the owner as a batch (decisions-log item 168 (12)).
 
-**What is asked and what is told** (decisions-log item 227, the owner's answer to point 33). The
-main session decides these and tells the owner in a short list the owner can veto, rather than
-asking: keeping a tuning value as built; re-dating a marker; spec or AGENTS.md edits that only make
-the text match what was built or what the owner already ruled; and how a test or measurement is
-run. It always asks about anything that changes what the player experiences, scope, lore, a rule of
-the project, risk the owner would carry, and anything the owner ruled before. Item 168 (12)'s
-hold-and-batch, the paragraph above, still governs what is asked. In one plain sentence (the main
-session's reading of the owner's answer to point 43, "keep it simple"; the owner can veto;
-decisions-log item 228): the main session decides routine housekeeping and tells the owner; it
-asks about anything that changes the game, the plan, the rules, or something the owner already
-decided.
+**What is asked and what is told** (decisions-log items 227 and 228, the owner's answers to
+points 33 and 43). The main session decides routine housekeeping and tells the owner; it asks about
+anything that changes the game, the plan, the rules, or something the owner already decided. That
+sentence is the main session's reading of the owner's answer to point 43, "keep it simple" (the
+owner can veto). The housekeeping is the four kinds the owner approved in point 33, told in a short
+list the owner can veto: keeping a tuning value as built; re-dating a marker; spec or AGENTS.md
+edits that only make the text match what was built or what the owner already ruled; and how a test
+or measurement is run. On the same reading of point 43, the four are told even where a marker or a
+sentence names the owner; a change to what the owner ruled, or to a value the owner reserved, is
+never one of them. Item 168 (12), the paragraph above, still governs what is held and asked.
 
 ## Commands
 

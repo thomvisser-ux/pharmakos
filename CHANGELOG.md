@@ -14,11 +14,20 @@ milestone build inside stage N, and `1.0.0` is v1. The development tags `v0.1.0-
 
 ## 0.3.0
 
-S3, authoring: the build S3's close carries (decisions-log items 224 to 226). It keeps everything
-the section below lists, and S2's destruction and combat, which this file did not list at the
-time.
+S3, authoring: the build S3's close carries (decisions-log items 224 to 226). Unsigned zips for
+Windows x86_64 and Linux x86_64. It holds the three earlier stages as well:
 
-- **Probation**, the lobby's one-click match: the owner against Easy on seed 20, the 3 / 5 / 8
+- The walking skeleton: one local match end to end against the built-in operator on Easy, in the
+  Godot client and headless, deterministic and replayable bit for bit on Windows, Linux and macOS.
+- S1, the economy (decisions-log item 143): one power grid per seat, finite seams, the Build
+  mandate's full settings, targeting by description, and the verifier's money and time checks.
+- S2, destruction and combat (decisions-log item 155): walls, autocannons and mortars, raiders
+  and demolition charges, the Defend and Attack mandates, craters, and repair and salvage of
+  wrecks.
+
+New in S3:
+
+- **Probation**, the lobby's one-click match: a player against Easy on seed 20, the 3 / 5 / 8
   ladder, untimed Lulls, and a **Playtest mode** checkbox, off by default.
 - The wizard's **guided first pick**: one template marked as the place to start, with the
   gateway's reason, and the other templates still listed.

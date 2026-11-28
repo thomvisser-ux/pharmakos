@@ -13,18 +13,24 @@
 #   4. downloads that run's `pharmakos-windows` and `pharmakos-linux` zips, renames them
 #      pharmakos-<tag>-<os>-x86_64.zip and writes SHA256SUMS.txt;
 #   5. takes the notes from CHANGELOG.md's section headed with the package's version string,
-#      `xtask/src/package.rs`'s `VERSION` at that commit (the string the zips carry), and for a
-#      tag with no `-` suffix requires that string to be the tag's own version; adds the tag
-#      and the commit;
+#      `xtask/src/package.rs`'s `VERSION` at that commit (the string the zips carry), and
+#      requires that string to be the tag's own version, for every tag, with a suffix or
+#      without (item 228): a tag on a commit that names another version would publish that
+#      version's zips and notes under the wrong name; adds the tag and the commit;
 #   6. creates a DRAFT with `gh release create --verify-tag`, a prerelease when the tag has
 #      a `-` suffix. The owner publishes it; nothing here publishes anything.
 #
 # A workflow_dispatch with `tag` and an optional `sha` (default: main's head) runs steps 1 to
 # 5 as a dry run and prints what it would upload; the create step's only condition is a
-# pushed `v*` tag. The skeleton's tags were `v0.1.0-dev.<n>` from 1 (item 117 (13)). From
-# item 228 versions are stage-based before 1.0, the minor number the stage: `v0.N.0` closes
-# stage N, `v0.N.P` is a fix, `v0.N.0-m<K>` a milestone build inside stage N (a prerelease,
-# by its suffix), and `v1.0.0` is v1; the main session pushes a tag on the owner's ruling.
+# pushed `v*` tag. The dry run makes step 5's check too, so between tags, while main's
+# `VERSION` is the next version with `-dev`, a dry run on main's head fails there by design:
+# give it the `sha` of the commit that sets the tag's version. The skeleton's tags were
+# `v0.1.0-dev.<n>` from 1 (item 117 (13)); they are history, were cut from a commit whose
+# `VERSION` was `0.1.0-dev+skeleton`, and are never pushed again, so step 5's check does not
+# have to admit them. From item 228 versions are stage-based before 1.0, the minor number
+# the stage: `v0.N.0` closes stage N, `v0.N.P` is a fix, `v0.N.0-m<K>` a milestone build
+# inside stage N (a prerelease, by its suffix), and `v1.0.0` is v1; step 1 accepts those
+# forms and no other suffix. The main session pushes a tag, each one on the owner's word.
 #
 # Security: no permissions at the top, `contents: write` and `actions: read` on the one job;
 # no checkout and no third-party action; the tag and every input reach the shell only
@@ -39,7 +45,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "The tag to cut, as v<major>.<minor>.<patch>[-<suffix>] (a dry run: nothing is created)"
+        description: "The tag to cut, as v<major>.<minor>.<patch> or v<major>.<minor>.<patch>-m<K> (a dry run: nothing is created)"
         required: true
         type: string
       sha:
@@ -79,8 +85,10 @@ jobs:
           else
             tag="$INPUT_TAG"
           fi
-          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
-            echo "::error::the tag is not v<major>.<minor>.<patch>[-<suffix>]"
+          # The scheme's two forms (item 228): a release, or a milestone build `-m<K>`. No
+          # other suffix: a `-dev` tag on main's head would cut a release of a dev build.
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-m[0-9]+)?$ ]]; then
+            echo "::error::the tag is not v<major>.<minor>.<patch> or v<major>.<minor>.<patch>-m<K>"
             exit 1
           fi
           if [ "$EVENT" = "push" ]; then
@@ -168,8 +176,10 @@ jobs:
             printf '::error::xtask/src/package.rs at %s has no version-shaped VERSION (found: %q)\n' "$SHA" "$heading"
             exit 1
           fi
-          if [[ "$TAG" != *-* && "$heading" != "${TAG#v}" ]]; then
-            echo "::error::tag $TAG has no suffix, so the package version must be ${TAG#v}; it is $heading"
+          # Every tag, with a suffix or without: the commit's version is the tag's (item 228).
+          # $heading passed the version-shape check above, so printing it raw is safe.
+          if [ "$heading" != "${TAG#v}" ]; then
+            echo "::error::tag $TAG needs the package version ${TAG#v} at $SHA; it is $heading. Tag the commit that sets VERSION to ${TAG#v}"
             exit 1
           fi
           gh api "repos/$GH_REPO/contents/CHANGELOG.md?ref=$SHA" --jq .content | base64 -d > changelog.md

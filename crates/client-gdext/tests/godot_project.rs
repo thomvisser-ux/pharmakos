@@ -713,8 +713,11 @@ fn the_export_ships_the_smoke_check_and_no_other_test_file() {
         "binary_format/embed_pck=false",
         "binary_format/architecture=\"x86_64\"",
         "application/modify_resources=true",
-        "application/product_version=\"0.3.0\"",
-        "application/file_version=\"0.3.0.0\"",
+        // The product and file versions are held to `xtask/src/package.rs`'s `VERSION` by
+        // that file's `the_version_string_is_one_source_and_its_copies_follow_it`, so no
+        // version is written here (decisions-log item 228).
+        "application/product_version=\"",
+        "application/file_version=\"",
     ] {
         assert!(
             presets.contains(setting),
