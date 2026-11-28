@@ -118,7 +118,7 @@ jobs:
           status=$(gh api "repos/$GH_REPO/compare/main...$sha" --jq .status)
           case "$status" in
             identical|behind) ;;
-            *) echo "::error::$sha is not on main (compare says $status); tag a commit on main"; exit 1 ;;
+            *) echo "::error::$sha is not on main (compare says $status); a release is cut from a merge commit on main"; exit 1 ;;
           esac
           echo "SHA=$sha" >> "$GITHUB_ENV"
           echo "commit $sha is on main ($status)"
@@ -130,16 +130,16 @@ jobs:
           run=$(gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&per_page=1" \
             --jq '.workflow_runs[0] // empty | [.id, .status, (.conclusion // "none")] | @tsv')
           if [ -z "$run" ]; then
-            echo "::error::ci.yml has no push run for $SHA; tag main's head once its run is green"
+            echo "::error::ci.yml has no push run for $SHA. Only a commit that was main's head when it was pushed gets one (a pull request's merge commit); a commit from inside a branch never will"
             exit 1
           fi
           IFS=$'\t' read -r id status conclusion <<< "$run"
           if [ "$status" != "completed" ]; then
-            echo "::error::the push run for $SHA is still running; tag again once it is green (run $id)"
+            echo "::error::the push run for $SHA is still running (run $id)"
             exit 1
           fi
           if [ "$conclusion" != "success" ]; then
-            echo "::error::the push run for $SHA concluded $conclusion (run $id); re-run it with \`gh run rerun $id\`, or tag main's head once its run is green"
+            echo "::error::the push run for $SHA concluded $conclusion (run $id)"
             exit 1
           fi
           echo "RUN_ID=$id" >> "$GITHUB_ENV"
@@ -179,7 +179,7 @@ jobs:
           # Every tag, with a suffix or without: the commit's version is the tag's (item 228).
           # $heading passed the version-shape check above, so printing it raw is safe.
           if [ "$heading" != "${TAG#v}" ]; then
-            echo "::error::tag $TAG needs the package version ${TAG#v} at $SHA; it is $heading. Tag the commit that sets VERSION to ${TAG#v}"
+            echo "::error::tag $TAG needs the package version ${TAG#v}; at $SHA it is $heading. The tag belongs on the merge commit of the pull request that sets VERSION to ${TAG#v}"
             exit 1
           fi
           gh api "repos/$GH_REPO/contents/CHANGELOG.md?ref=$SHA" --jq .content | base64 -d > changelog.md
@@ -226,3 +226,18 @@ jobs:
             prerelease=" --prerelease"
           fi
           echo "::notice title=release dry run::a pushed $TAG would create a draft$prerelease titled \"$TAG ($VERSION)\" from run $RUN_ID of $SHA, with pharmakos-$TAG-windows-x86_64.zip, pharmakos-$TAG-linux-x86_64.zip and SHA256SUMS.txt"
+
+      # What to do after a refusal, said once, for each event. A pushed v* tag cannot be moved
+      # or deleted (the tag rulesets, decisions-log items 119 (2) and 121), so "tag again" is
+      # never the remedy (item 230). These steps only print; they decide nothing.
+      - name: After a refusal on a pushed tag
+        if: failure() && github.event_name == 'push'
+        shell: bash
+        run: |
+          echo "::error title=a pushed tag cannot be moved or deleted::If the tagged commit itself is right and only its ci.yml push run was unfinished, or failed on something a re-run of its failed jobs cures (gh run rerun <that run> --failed, which rebuilds nothing that passed), then re-run THIS run once that run is green: gh run rerun $GITHUB_RUN_ID. If the create step failed because a draft for this tag already exists, delete that draft release (never the tag) and re-run this run. If the fault is in the tag's name or in the tagged commit (wrong shape, not a merge commit on main, another version, no changelog section, a real test failure), or the push run's zips have expired, this tag will never cut a release while the rulesets stand; where it named a real version, that number is spent, and the next one needs the owner's word. Dry-run every tag before pushing it (workflow_dispatch with the tag and the commit's sha)."
+
+      - name: After a refusal on a dry run
+        if: failure() && github.event_name != 'push'
+        shell: bash
+        run: |
+          echo "::notice title=the dry run refused this tag::This dry run created nothing. Cure the cause above, then dry-run again with the same tag and the sha of the commit it is meant for (a dry run with no sha checks main's head as it is at that moment)."

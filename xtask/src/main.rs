@@ -181,7 +181,8 @@
 //! `$GITHUB_OUTPUT`, and the job's later steps run only when the answer is not
 //! `prose`. It answers `prose` only for a `pull_request` whose merge commit
 //! changes nothing but `docs/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**` and
-//! top-level `*.md`, and `full` on any error (decisions-log item 115 (4)); see
+//! top-level `*.md`, less the files a test reads (item 230), and `full` on any error
+//! (decisions-log item 115 (4)); see
 //! [`scope`] for the rules and why each holds.
 //!
 //! # The package
