@@ -154,7 +154,8 @@ operating system's leg is three `cargo xtask ci shard <n> (<os>)` jobs, each run
 fails unless every shard passed and runs `golden` over their merged outputs (decisions-log item
 148 (2)); the unsharded command runs the same steps over the same units.
 A prose-only pull request (one that changes nothing but
-`docs/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**` and top-level `*.md`) runs the DCO walk and the
+`docs/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**` and top-level `*.md`, less the files a test reads:
+`CHANGELOG.md`, `docs/design/s3-plan.md` and the playbooks under `docs/demo`, item 230) runs the DCO walk and the
 `reuse` step in place of the suite, so for it "CI's checks are green on the branch" means those two
 passed, and `main`'s push runs everything (decisions-log item 115 (4)).
 If `cargo xtask ci` is green locally and a `cargo xtask ci` leg is red in CI, that is an

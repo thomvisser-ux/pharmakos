@@ -1076,7 +1076,11 @@ merge train's local check.
 
 **The docs-only fast path.** A pull request whose merge commit changes only `docs/**`, `AGENTS.md`,
 `CLAUDE.md`, `.claude/**` and top-level `*.md` runs the DCO walk and the `reuse` step in place of the
-suite; either can still fail it. Every other required job skips its remaining steps and reports
+suite; either can still fail it. A file a test reads is never prose, wherever it lies
+(decisions-log item 230): `CHANGELOG.md` (the version test), `docs/design/s3-plan.md` (the bench's
+certifying test) and the `.jsonc` and `.json` files under `docs/demo` (the reader corpus walks
+that folder). A test that starts to read a file on the allow-list adds it to the lists in
+`xtask/src/scope.rs` (`READ_BY_THE_SUITE`, `CORPUS_UNDER_PROSE`) in the same pull request. Every other required job skips its remaining steps and reports
 success; each job that builds, and the cross-OS guard, says so in a `::notice::`. Each building
 job's scope step decides (each shard, not the leg's `cargo xtask ci (<os>)` job, which takes prose
 only when every one of its shards' reports says so): it answers `full` in bash,
@@ -1127,17 +1131,25 @@ string is what tells a milestone build from its stage's close). `package.rs`'s t
 `[workspace.package] version` stays `0.0.0` (item 117 (2)), so `gamectl --version` prints `0.0.0`
 and the note's build line names the build. **A version's life** (the main session's reading of
 point 41; the owner can veto): the commit a tag goes on carries `VERSION` equal to the tag's
-version. It is the merge commit of a pull request that does nothing but set the version: it sets
-`VERSION` and the preset, and renames `CHANGELOG.md`'s `-dev` section to the tag's version (or
-adds the section) and makes it stand on its own. That pull request touches `xtask/**`, so it gets
-two reviews (§6). Between tags, `main`'s `VERSION` names the stage being built, with `-dev`
-(`0.4.0-dev` throughout S4), over a `## 0.4.0-dev` section that collects what has landed. The
-first pull request of new work after a tag sets it, and until it merges nothing but fixes merges,
-so a build of new work never claims a released version. **A tag is pushed by the main session, never by a
+version. It is the merge commit of a pull request that does nothing but set the version, for
+every kind of tag, a fix's included: it sets `VERSION` and the preset, and renames
+`CHANGELOG.md`'s `-dev` section to the tag's version (or adds the section) and makes it stand on
+its own. That pull request touches `xtask/**`, so it gets two reviews (§6). Between tags, `main`'s `VERSION` names the stage being built, with `-dev`
+(`0.4.0-dev` throughout S4), over a `## 0.4.0-dev` section that collects what has landed. A
+pull request that does nothing but set it merges after the tag and before any new work, so a
+build of new work never claims a released version. **A tag is pushed by the main session, never by a
 lane, and each tag needs the owner's word** (the owner approved `v0.3.0` in point 41; that every
 later tag is asked for is the main session's reading, which the owner can veto); the tag rulesets
 make a `v*` tag immutable and let only a repository admin create one (decisions-log items 119 (2)
-and 121). On a pushed `v*` tag, `.github/workflows/release.yml` checks the tag's shape
+and 121). **A pushed tag cannot be moved or deleted while those rulesets stand, so a wrong one
+spends its version number:** before pushing a tag, the main session runs the workflow's dry run
+(`workflow_dispatch` with the tag and the commit's `sha`) and pushes only after it passes. If a
+release run is refused only because the commit's push run was unfinished, or failed on something
+a re-run of its failed jobs cures, the remedy is to re-run the release run once that run is
+green; if the fault is in the tag's name or in the commit, the tag is spent and the next number
+needs the owner's word. Tagging again is never the remedy. A tag is pushed from a checkout whose
+HEAD is the tagged commit, because the pre-push hook refuses to push any ref but HEAD. On a
+pushed `v*` tag, `.github/workflows/release.yml` checks the tag's shape
 (`v<major>.<minor>.<patch>`, or the same with `-m<K>`, and no other suffix, so a `-dev` version
 can never be tagged), that its commit is on `main`, and that `ci.yml`'s push run for that exact
 commit succeeded; takes that run's two zips, with no rebuild; requires `VERSION` at that commit to
@@ -1145,10 +1157,14 @@ be the tag's own version, for every tag; takes the notes from `CHANGELOG.md`'s s
 it; and creates a draft release, a prerelease when the tag is a milestone's. The workflow publishes nothing: a draft stays unpublished
 until the owner publishes it or says otherwise, and the main session asks when it pushes the tag
 (`v0.3.0`'s draft included: the public preview is whichever version passes the fun gate). **A fix
-tag (`v0.N.P`)** is possible only while `main` holds nothing but fixes since `v0.N.0`, that is,
-until the `-dev` pull request merges, because the workflow accepts only a commit on `main`: the
-fix's own pull request sets `VERSION` to `0.N.P` and is tagged on its merge commit. Once new work
-has merged, a fix ships in the next milestone build. A release branch would change `release.yml` and is the owner's to rule
+tag (`v0.N.P`)** is possible only while `main` holds nothing but fixes and version changes since
+`v0.N.0`, because the workflow accepts only a commit on `main`. The fix merges as its own pull
+request; a version pull request then sets `VERSION` to `0.N.P` and replaces the `-dev` section,
+if there is one, with a `## 0.N.P` section that stands on its own, and is tagged on its merge
+commit; a `-dev` pull request follows the tag. Once new work has merged, a fix ships in the next
+milestone build. (This replaces item 228 (9) (g)'s "until the `-dev` pull request merges", which
+assumed that pull request carried new work: decisions-log item 230 (3); the main session's
+reading, which the owner can veto.) A release branch would change `release.yml` and is the owner's to rule
 (held). **The test tiers by tag kind**, as the owner ruled them (points 29 and 41; decisions-log
 items 227 and 228), are the rule the merge queue's pull request will implement: a stage close
 (`v0.N.0`) or a public release is "major" and gets the timed certifying runs, the fuzz and the
