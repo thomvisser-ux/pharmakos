@@ -24,6 +24,10 @@ to that tag's version.
   operator, with a seat's rights and no token. The commands and their output may change in any
   release. The game itself is unchanged: the lobby does not offer the seat, and no AI runs
   inside the game (decisions-log item 231).
+- **A match replays from its sealed files.** The scenario format gains the `sealed` seat kind,
+  which seals a folder of a match's per-round sealed playbooks through `submit_plan` again, and
+  the optional `segment_lengths_ms` key, a match's segment length list. A match played through
+  the external seat is kept as a scenario by copying its folders (decisions-log item 232).
 
 ## 0.3.0
 

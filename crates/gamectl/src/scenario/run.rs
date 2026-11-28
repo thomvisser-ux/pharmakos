@@ -49,10 +49,11 @@
 //!
 //! # The match settings a file may name
 //!
-//! One input of a match beyond the triple is the scenario's own key since S1's
-//! first contract pull request (the register's S1-41), and optional. Its
-//! sibling `units_per_seat`, the harness walkers, went with them (S2-16, S2's
-//! plan decision 23).
+//! Two inputs of a match beyond the triple are the scenario's own keys, each
+//! optional: `round_limit` since S1's first contract pull request (the
+//! register's S1-41) and `segment_lengths_ms` since decisions-log item 232.
+//! `round_limit`'s sibling `units_per_seat`, the harness walkers, went with
+//! them (S2-16, S2's plan decision 23).
 //!
 //! * `round_limit` is the sim's
 //!   [`DEFAULT_ROUND_LIMIT`](pharmakos_sim::runner::DEFAULT_ROUND_LIMIT), the
@@ -60,6 +61,11 @@
 //!   (decisions-log item 102 (7)), when the file names none; a scenario that
 //!   plays a match to its end names it, and both readers refuse a limit below
 //!   the file's segment count.
+//! * `segment_lengths_ms` is the match's segment length list, the lobby's
+//!   setting, which the match state hashes. When the file names none it is
+//!   the lengths of the file's own segments; a scenario that replays a match
+//!   played elsewhere states that match's list whole
+//!   (`Scenario::segment_lengths_ms`).
 //!
 //! Absent, both are what every committed chain was produced with, so the keys
 //! moved no chain. `scenarios/README.md` documents them.
@@ -109,7 +115,7 @@ use pharmakos_sim::world::WorldConfig;
 use crate::cli::RunOptions;
 use crate::exit::{Exit, Failure};
 use crate::host::EasyOperators;
-use crate::scenario::{Assertion, Scenario, SeatKind, ticks_of};
+use crate::scenario::{Assertion, Scenario, SeatKind, sealed_file, ticks_of};
 use crate::strings;
 
 /// The most of the hash chain this runner reserves up front, in bytes.
@@ -362,8 +368,9 @@ pub struct Audited {
 /// Play one scenario **to the match's end** and say how it ended, asserting
 /// nothing: what `--seeds` does once per seed.
 ///
-/// The file's segments are the match's segment lengths, as they are for
-/// [`play`], and rounds past the last listed segment take the last length, as
+/// The match's segment length list is the file's, as it is for [`play`]
+/// (`segment_lengths_ms` where the file names it, the lengths of its segments
+/// where it does not), and rounds past the list's end take its last length, as
 /// the sim's ladder does (`MatchSettings::segment_lengths_ms`); the match
 /// plays until the sim decides it, which its round limit bounds. Every
 /// `playbook` seat goes through `submit_plan` every round: a refusal is a
@@ -572,11 +579,44 @@ fn held_round(index: usize, sim_round: u32) -> Result<u32, Failure> {
     }
 }
 
-/// Seal every `playbook` seat's file for the Lull the match stands in.
+/// What a refusal of a seat's playbook by `submit_plan` means for the run.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Refused {
+    /// The harness door is taken, with a note ([`seal`]).
+    HarnessDoor,
+    /// The run fails: an arm that is broken on this seed and round.
+    BrokenArm,
+    /// The run fails: a `sealed` seat's file that the door it was sealed
+    /// through no longer takes, so the match it came from is not the one
+    /// being played.
+    BrokenReplay,
+}
+
+impl Refused {
+    /// The run's failure for a refusal said as `why`, or `None` where the
+    /// harness door is taken instead.
+    fn failure(self, seat: u8, relative: &str, round: u32, why: &str) -> Option<Failure> {
+        match self {
+            Refused::HarnessDoor => None,
+            Refused::BrokenArm => Some(Failure::new(
+                Exit::Failed,
+                strings::nightly_arm_refused(seat, relative, round, why),
+            )),
+            Refused::BrokenReplay => Some(Failure::new(
+                Exit::Failed,
+                strings::sealed_replay_refused(seat, relative, round, why),
+            )),
+        }
+    }
+}
+
+/// Seal every `playbook` seat's file, and every `sealed` seat's file of this
+/// round, for the Lull the match stands in.
 ///
-/// A seat the verifier refuses goes through the harness door with a note, as
-/// [`seal`] says, except in a run to the match's end (`nightly`), where
-/// [`seal`] fails the run on a refusal instead: a broken arm.
+/// A `playbook` seat the verifier refuses goes through the harness door with
+/// a note, as [`seal`] says, except in a run to the match's end (`nightly`),
+/// where [`seal`] fails the run on a refusal instead: a broken arm. A `sealed`
+/// seat's refusal always fails the run.
 fn seal_all(
     root: &Path,
     surface: &mut Surface,
@@ -586,10 +626,16 @@ fn seal_all(
     notes: &mut Vec<String>,
 ) -> Result<(), Failure> {
     for (seat, token) in scenario.seats.iter().zip(tokens) {
-        let SeatKind::Playbook(relative) = &seat.kind else {
-            continue;
+        let (relative, refused) = match &seat.kind {
+            SeatKind::Playbook(relative) if nightly => (relative.clone(), Refused::BrokenArm),
+            SeatKind::Playbook(relative) => (relative.clone(), Refused::HarnessDoor),
+            SeatKind::Sealed(folder) => {
+                (sealed_file(folder, round(surface)?), Refused::BrokenReplay)
+            }
+            SeatKind::Safe | SeatKind::Builtin => continue,
         };
-        let Door::Harness(codes) = seal(root, surface, token, seat.seat, relative, nightly)? else {
+        let relative = relative.as_str();
+        let Door::Harness(codes) = seal(root, surface, token, seat.seat, relative, refused)? else {
             continue;
         };
         let note = strings::scenario_harness_seal(seat.seat, relative, &codes);
@@ -753,11 +799,7 @@ fn open(root: &Path, scenario: &Scenario, rules: RulesTable) -> Result<Surface, 
             seats: count,
             rules: rules.clone(),
             match_settings: MatchSettings {
-                segment_lengths_ms: scenario
-                    .segments
-                    .iter()
-                    .map(|segment| segment.length_ms)
-                    .collect(),
+                segment_lengths_ms: scenario.segment_lengths_ms.clone(),
                 round_limit: scenario.round_limit,
             },
         },
@@ -889,7 +931,7 @@ fn seal(
     token: &Token,
     seat: u8,
     relative: &str,
-    nightly: bool,
+    refused: Refused,
 ) -> Result<Door, Failure> {
     // Read no further than the size cap needs, as `gamectl verify` reads one
     // (S3's `vfy6`, the review of PR #179).
@@ -929,12 +971,11 @@ fn seal(
 
     if let Some(error) = answer.get("error") {
         // In a run to the match's end, a refusal of any kind is a broken arm
-        // on this seed and round, as the module docs promise.
-        if nightly {
-            return Err(Failure::new(
-                Exit::Failed,
-                strings::nightly_arm_refused(seat, relative, round(surface)?, &message_of(error)),
-            ));
+        // on this seed and round, as the module docs promise; and a `sealed`
+        // seat's is a broken replay.
+        if let Some(failure) = refused.failure(seat, relative, round(surface)?, &message_of(error))
+        {
+            return Err(failure);
         }
         return Err(Failure::input(strings::scenario_playbook_refused(
             seat,
@@ -963,13 +1004,10 @@ fn seal(
     }
 
     let codes = codes_of(result)?;
-    // A nightly run never takes the harness door: the refusal fails the run,
-    // naming the round, before anything is sealed.
-    if nightly {
-        return Err(Failure::new(
-            Exit::Failed,
-            strings::nightly_arm_refused(seat, relative, round(surface)?, &codes),
-        ));
+    // A nightly run and a `sealed` seat never take the harness door: the
+    // refusal fails the run, naming the round, before anything is sealed.
+    if let Some(failure) = refused.failure(seat, relative, round(surface)?, &codes) {
+        return Err(failure);
     }
     // The second door, the gateway's own: it verifies the text once more,
     // compiles, prices and fingerprints that one decode, and files the seal
@@ -1518,8 +1556,15 @@ mod tests {
             let super::SeatKind::Playbook(relative) = &seat.kind else {
                 continue;
             };
-            let door = super::seal(root(), &mut surface, token, seat.seat, relative, false)
-                .expect("sealed");
+            let door = super::seal(
+                root(),
+                &mut surface,
+                token,
+                seat.seat,
+                relative,
+                super::Refused::HarnessDoor,
+            )
+            .expect("sealed");
             if matches!(door, super::Door::Harness(_)) {
                 harnessed += 1;
             }
@@ -1602,8 +1647,15 @@ mod tests {
         let tokens = super::mint(&mut surface, &scenario).expect("tokens");
         let token = tokens.get(index).expect("its token");
         let _ = work::take();
-        let door =
-            super::seal(root(), &mut surface, token, seat, &relative, false).expect("sealed");
+        let door = super::seal(
+            root(),
+            &mut surface,
+            token,
+            seat,
+            &relative,
+            super::Refused::HarnessDoor,
+        )
+        .expect("sealed");
         let whole = work::take();
         assert!(matches!(door, super::Door::Harness(_)), "{door:?}");
 

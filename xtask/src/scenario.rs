@@ -5,7 +5,7 @@
 //! makes before it plays a file.
 //!
 //! A scenario is a headless match written down: **a map seed, the rules table,
-//! one playbook per seat, the segment list, and assertions on events *and* on
+//! each seat's playbooks, the segment list, and assertions on events *and* on
 //! the hash chain** (AGENTS.md section 9 item 10, section 10 item 4). The first
 //! three are exactly AGENTS.md section 4's triple — "the sim is a pure function
 //! of (map seed, playbooks, rules hash)" — which is what makes a committed hash
@@ -106,10 +106,24 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "map",
     "rules",
     "round_limit",
+    "segment_lengths_ms",
     "seats",
     "segments",
     "assertions",
 ];
+
+/// The most lengths a match's segment length list holds: the sim's
+/// `MAX_SEGMENT_LENGTHS` (`crates/sim/src/rules.rs`). xtask is std-only and
+/// cannot name it, so `crates/gamectl/tests/parity.rs` pins this copy to it,
+/// and `gamectl`'s reader, which names the sim's, refuses the same files.
+pub(crate) const MAX_SEGMENT_LENGTHS: usize = 8;
+
+/// The shortest segment a match opens on: one tick, the sim's `MS_PER_TICK`
+/// (`crates/sim/src/math/quantity.rs`). The gateway opens no match on a
+/// shorter length, so both readers refuse one in the file, with its pointer,
+/// rather than leave the run to fail on a match that would not open.
+/// `crates/gamectl/tests/parity.rs` pins this copy to the sim's as well.
+pub(crate) const MS_PER_TICK: i64 = 50;
 
 /// The longest segment a scenario may play, in game milliseconds: spec
 /// section 3's "the world then runs for up to 8 minutes", the top of the 3 / 5
@@ -148,9 +162,9 @@ const MAP_KEYS: &[&str] = &["seed", "generator"];
 /// A `builtin` seat plays Easy, and the key that would name another difficulty
 /// waits for one: owner, at S5 (decisions-log item 113 (8)). Adding a key is
 /// additive, so that is not a format break.
-const SEAT_KEYS: &[&str] = &["seat", "kind", "playbook"];
+const SEAT_KEYS: &[&str] = &["seat", "kind", "playbook", "sealed"];
 const SEGMENT_KEYS: &[&str] = &["index", "length_ms", "note"];
-const SEAT_KINDS: &[&str] = &["playbook", "safe", "builtin"];
+const SEAT_KINDS: &[&str] = &["playbook", "sealed", "safe", "builtin"];
 
 /// At most three seats share a local match: one human and up to two built-in
 /// operators (spec section 3; AGENTS.md section 1).
@@ -267,7 +281,9 @@ pub(crate) fn validate(root: &Path, path: &Path) -> Result<Scenario, String> {
             check_arm_seats(&json, &mut problems);
         }
         let segments = check_segments(&json, &mut problems);
+        check_sealed_rounds(root, &json, segments, &mut problems);
         check_match_settings(&json, segments, &mut problems);
+        check_ladder(&json, &mut problems);
         assertions = check_assertions(root, &json, nightly, &mut problems);
     } else {
         problems.push(Problem::new("", "a scenario file is a JSON object"));
@@ -460,6 +476,33 @@ fn check_seats(root: &Path, json: &Json, problems: &mut Vec<Problem>) -> usize {
             ));
             continue;
         };
+        // The key that names what a kind seals belongs to that kind alone.
+        for (key, owner) in [("playbook", "playbook"), ("sealed", "sealed")] {
+            if kind == owner || seat.get(key).is_none() {
+                continue;
+            }
+            let why = match kind {
+                "playbook" => "seals the one file its `playbook` names",
+                "sealed" => "seals the files in the folder its `sealed` names",
+                _ => "does not seal a file",
+            };
+            problems.push(Problem::new(
+                &format!("{base}/{key}"),
+                format!("a `{kind}` seat {why}, so it takes no `{key}`"),
+            ));
+        }
+        if kind == "sealed" {
+            match seat.get("sealed").and_then(Json::as_str) {
+                Some(relative) => {
+                    check_repository_folder(root, &format!("{base}/sealed"), relative, problems);
+                }
+                None => problems.push(Problem::new(
+                    &format!("{base}/sealed"),
+                    "a `sealed` seat names the folder of playbooks a match sealed, \
+                     `<round>.jsonc` for each round, as a path from the repository root",
+                )),
+            }
+        }
         if kind == "playbook" {
             match seat.get("playbook").and_then(Json::as_str) {
                 Some(relative) => check_repository_path(
@@ -475,14 +518,42 @@ fn check_seats(root: &Path, json: &Json, problems: &mut Vec<Problem>) -> usize {
                      root",
                 )),
             }
-        } else if seat.get("playbook").is_some() {
-            problems.push(Problem::new(
-                &format!("{base}/playbook"),
-                format!("a `{kind}` seat does not seal a file, so it takes no `playbook`"),
-            ));
         }
     }
     seats.len()
+}
+
+/// A `sealed` seat's folder holds `<round>.jsonc` for every round the
+/// scenario plays; the first round without one is named, once a seat
+/// (`crates/gamectl/src/scenario.rs` holds the same rule).
+fn check_sealed_rounds(root: &Path, json: &Json, segments: usize, problems: &mut Vec<Problem>) {
+    let Some(Json::Array(seats)) = json.get("seats") else {
+        return;
+    };
+    for (index, seat) in seats.iter().enumerate() {
+        if seat.get("kind").and_then(Json::as_str) != Some("sealed") {
+            continue;
+        }
+        let Some(folder) = seat.get("sealed").and_then(Json::as_str) else {
+            continue;
+        };
+        if leaves_the_repository(folder) || !root.join(folder).is_dir() {
+            // Already said, at the same pointer, by `check_seats`.
+            continue;
+        }
+        let missing = (1..=segments)
+            .map(|round| (round, format!("{folder}/{round}.jsonc")))
+            .find(|(_, file)| !root.join(file).is_file());
+        if let Some((round, file)) = missing {
+            problems.push(Problem::new(
+                &format!("/seats/{index}/sealed"),
+                format!(
+                    "`{file}` does not exist in the repository: a `sealed` seat seals \
+                     `<round>.jsonc` in every round, and this scenario plays round {round}"
+                ),
+            ));
+        }
+    }
 }
 
 /// Returns how many segments the file lists, for the round limit's check.
@@ -521,12 +592,19 @@ fn check_segments(json: &Json, problems: &mut Vec<Problem>) -> usize {
         }
 
         match integer(segment.get("length_ms")) {
-            Some(number) if number > 0 && number <= MAX_SEGMENT_MS => {}
+            Some(number) if (MS_PER_TICK..=MAX_SEGMENT_MS).contains(&number) => {}
             Some(number) if number > MAX_SEGMENT_MS => problems.push(Problem::new(
                 &format!("{base}/length_ms"),
                 format!(
                     "a segment plays at most {MAX_SEGMENT_MS} game milliseconds, spec section \
                      3's eight minutes; found {number}"
+                ),
+            )),
+            Some(number) if number > 0 => problems.push(Problem::new(
+                &format!("{base}/length_ms"),
+                format!(
+                    "a segment plays at least one tick, {MS_PER_TICK} game milliseconds: no \
+                     match opens on a shorter one; found {number}"
                 ),
             )),
             Some(number) => problems.push(Problem::new(
@@ -545,8 +623,9 @@ fn check_segments(json: &Json, problems: &mut Vec<Problem>) -> usize {
     segments.len()
 }
 
-/// The match setting a scenario may name (the register's S1-41, taken in S1's
-/// first contract pull request): `round_limit`, the round the match ends on,
+/// `round_limit`, one of the two match settings a scenario may name (the
+/// register's S1-41, taken in S1's first contract pull request; the other is
+/// `segment_lengths_ms`, [`check_ladder`]): the round the match ends on,
 /// optional, and absent what every committed chain was produced with, the
 /// sim's `DEFAULT_ROUND_LIMIT`. Its sibling `units_per_seat`, the harness
 /// walkers, went with them (S2-16, S2's plan decision 23): a file that still
@@ -579,6 +658,78 @@ fn check_match_settings(json: &Json, segments: usize, problems: &mut Vec<Problem
                  of {DEFAULT_ROUND_LIMIT})"
             ),
         ));
+    }
+}
+
+/// The optional `segment_lengths_ms` key, the match's segment length list:
+/// one to [`MAX_SEGMENT_LENGTHS`] lengths, each a segment's length by the
+/// rule a segment's own is held to, and every segment the file plays the
+/// length its round takes from the list (its own entry, and past the end the
+/// last one). Absent, the match takes the lengths of the file's segments, as
+/// every match did before the key existed, so adding it moved no chain.
+fn check_ladder(json: &Json, problems: &mut Vec<Problem>) {
+    let Some(value) = json.get("segment_lengths_ms") else {
+        return;
+    };
+    let Json::Array(entries) = value else {
+        problems.push(Problem::new(
+            "/segment_lengths_ms",
+            format!(
+                "optional, but when present it is the match's segment length list: an array of \
+                 1 to {MAX_SEGMENT_LENGTHS} lengths in game milliseconds"
+            ),
+        ));
+        return;
+    };
+    if entries.is_empty() || entries.len() > MAX_SEGMENT_LENGTHS {
+        problems.push(Problem::new(
+            "/segment_lengths_ms",
+            format!(
+                "a match's segment length list holds 1 to {MAX_SEGMENT_LENGTHS} lengths; this \
+                 one holds {}",
+                entries.len()
+            ),
+        ));
+        return;
+    }
+    let mut ladder: Vec<i64> = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        match integer(Some(entry)) {
+            Some(number) if (MS_PER_TICK..=MAX_SEGMENT_MS).contains(&number) => {
+                ladder.push(number);
+            }
+            _ => problems.push(Problem::new(
+                &format!("/segment_lengths_ms/{index}"),
+                format!(
+                    "a segment length is a positive count of game milliseconds, at least one \
+                     tick ({MS_PER_TICK}) and at most {MAX_SEGMENT_MS}, spec section 3's eight \
+                     minutes"
+                ),
+            )),
+        }
+    }
+    if ladder.len() != entries.len() {
+        return;
+    }
+    let Some(Json::Array(segments)) = json.get("segments") else {
+        return;
+    };
+    for (index, segment) in segments.iter().enumerate() {
+        // A segment with no usable length has been told so already.
+        let Some(length) = integer(segment.get("length_ms")) else {
+            continue;
+        };
+        let wanted = ladder.get(index).or(ladder.last()).copied();
+        if wanted != Some(length) {
+            problems.push(Problem::new(
+                &format!("/segments/{index}/length_ms"),
+                format!(
+                    "`segment_lengths_ms` gives this round {} game milliseconds, and the segment \
+                     says {length}; a segment plays the length its round has in the match",
+                    wanted.map_or_else(|| String::from("no"), |wanted| wanted.to_string()),
+                ),
+            ));
+        }
     }
 }
 
@@ -771,18 +922,48 @@ fn check_repository_path(
     must_exist: bool,
     problems: &mut Vec<Problem>,
 ) {
-    if value.starts_with('/') || value.contains('\\') || value.contains("..") {
-        problems.push(Problem::new(
-            pointer,
-            "paths are relative to the repository root, use forward slashes, and never contain \
-             `..` — a scenario names files in the tree and nothing outside it",
-        ));
+    if leaves_the_repository(value) {
+        problems.push(Problem::new(pointer, PATH_RULE));
         return;
     }
     if must_exist && !root.join(value).is_file() {
         problems.push(Problem::new(
             pointer,
             format!("`{value}` does not exist in the repository"),
+        ));
+    }
+}
+
+/// What a path in a scenario file must be.
+const PATH_RULE: &str = "paths are relative to the repository root, use forward slashes, have \
+                         no empty or `.` part and no `:`, and never contain `..` — a scenario \
+                         names files in the tree and nothing outside it";
+
+/// Whether `value` is anything but a path from the repository root that
+/// stays inside it, spelled the one way the format takes.
+///
+/// An empty part is a leading slash, a trailing one or a doubled one, and the
+/// empty path; a `:` is a Windows drive, which `Path::join` would follow out
+/// of the tree, or a stream name. `crates/gamectl/src/scenario.rs` holds the
+/// same function, and both crates' tests run their copy over
+/// `crates/gamectl/tests/corpus/scenario-paths.txt`.
+fn leaves_the_repository(value: &str) -> bool {
+    value.contains('\\')
+        || value.contains(':')
+        || value.contains("..")
+        || value.split('/').any(|part| part.is_empty() || part == ".")
+}
+
+/// [`check_repository_path`] for a folder that must exist.
+fn check_repository_folder(root: &Path, pointer: &str, value: &str, problems: &mut Vec<Problem>) {
+    if leaves_the_repository(value) {
+        problems.push(Problem::new(pointer, PATH_RULE));
+        return;
+    }
+    if !root.join(value).is_dir() {
+        problems.push(Problem::new(
+            pointer,
+            format!("`{value}` is not a folder in the repository"),
         ));
     }
 }
@@ -1350,6 +1531,162 @@ mod tests {
         let report = validate(&dir, &path).expect_err("rejected");
         assert!(report.contains("/seats/0/playbook"), "{report}");
         assert!(report.contains("does not exist"), "{report}");
+    }
+
+    /// `GOOD` with seat 0 a `sealed` seat over `sealed/seat-0`, in a scratch
+    /// tree whose folder holds the rounds listed.
+    fn sealed_case(name: &str, rounds: &[u32]) -> (PathBuf, String) {
+        let dir = scratch(name);
+        let folder = dir.join("sealed").join("seat-0");
+        fs::create_dir_all(&folder).expect("sealed folder");
+        for round in rounds {
+            fs::write(folder.join(format!("{round}.jsonc")), "{}\n").expect("sealed file");
+        }
+        let body = GOOD.replace(
+            r#""kind": "playbook", "playbook": "examples/playbooks/p.jsonc""#,
+            r#""kind": "sealed", "sealed": "sealed/seat-0""#,
+        );
+        assert_ne!(body, GOOD, "the seat line was not found");
+        (dir, body)
+    }
+
+    #[test]
+    fn a_sealed_seat_names_a_folder_with_a_file_for_every_round() {
+        let (dir, body) = sealed_case("sealed-good", &[1]);
+        let path = write(&dir, &body);
+        validate(&dir, &path).expect("a sealed seat with its round's file is valid");
+
+        // Two rounds played, one file.
+        let two = body.replace(
+            r#"[ { "index": 0, "length_ms": 180000 } ]"#,
+            r#"[ { "index": 0, "length_ms": 180000 }, { "index": 1, "length_ms": 180000 } ]"#,
+        );
+        let path = write(&dir, &two);
+        let report = validate(&dir, &path).expect_err("rejected");
+        assert!(report.contains("/seats/0/sealed"), "{report}");
+        assert!(report.contains("sealed/seat-0/2.jsonc"), "{report}");
+        assert!(report.contains("plays round 2"), "{report}");
+
+        // No folder, no key, a path out of the tree, and the other kind's key.
+        for (from, to, wanted) in [
+            ("sealed/seat-0", "sealed/nowhere", "is not a folder"),
+            (r#", "sealed": "sealed/seat-0""#, "", "names the folder"),
+            ("sealed/seat-0", "../seat-0", "never contain `..`"),
+            ("sealed/seat-0", "sealed/seat-0/", "no empty or `.` part"),
+            ("sealed/seat-0", "sealed//seat-0", "no empty or `.` part"),
+            ("sealed/seat-0", "C:/sealed/seat-0", "no `:`"),
+            (
+                r#""sealed": "sealed/seat-0""#,
+                r#""sealed": 7"#,
+                "names the folder",
+            ),
+        ] {
+            let path = write(&dir, &body.replace(from, to));
+            let report = validate(&dir, &path).expect_err("rejected");
+            assert!(report.contains("/seats/0/sealed"), "{report}");
+            assert!(report.contains(wanted), "{wanted}: {report}");
+        }
+        let both = body.replace(
+            r#""sealed": "sealed/seat-0""#,
+            r#""sealed": "sealed/seat-0", "playbook": "examples/playbooks/p.jsonc""#,
+        );
+        let report = validate(&dir, &write(&dir, &both)).expect_err("rejected");
+        assert!(report.contains("/seats/0/playbook"), "{report}");
+        let safe = body.replace(
+            r#"{ "seat": 1, "kind": "safe" }"#,
+            r#"{ "seat": 1, "kind": "safe", "sealed": "sealed/seat-0" }"#,
+        );
+        let report = validate(&dir, &write(&dir, &safe)).expect_err("rejected");
+        assert!(report.contains("/seats/1/sealed"), "{report}");
+        assert!(report.contains("does not seal a file"), "{report}");
+    }
+
+    #[test]
+    fn a_segment_plays_the_length_its_round_has_in_the_list() {
+        let dir = scratch("ladder");
+        let with = |list: &str| {
+            GOOD.replace(
+                r#""segments": ["#,
+                &format!(r#""segment_lengths_ms": {list}, "segments": ["#),
+            )
+        };
+        // The match's list may be longer than the rounds the file plays.
+        let path = write(&dir, &with("[180000, 300000, 480000]"));
+        validate(&dir, &path).expect("a list whose first length is the segment's");
+
+        for (list, pointer, wanted) in [
+            (
+                "[300000]",
+                "/segments/0/length_ms",
+                "gives this round 300000",
+            ),
+            (
+                "180000",
+                "/segment_lengths_ms",
+                "an array of 1 to 8 lengths",
+            ),
+            ("[]", "/segment_lengths_ms", "this one holds 0"),
+            (
+                "[1, 1, 1, 1, 1, 1, 1, 1, 1]",
+                "/segment_lengths_ms",
+                "this one holds 9",
+            ),
+            ("[180000, 0]", "/segment_lengths_ms/1", "a positive count"),
+            ("[480001]", "/segment_lengths_ms/0", "at most 480000"),
+            // Under a tick: no match opens on it, whether or not the file
+            // plays that round.
+            (
+                "[180000, 49]",
+                "/segment_lengths_ms/1",
+                "at least one tick (50)",
+            ),
+        ] {
+            let report = validate(&dir, &write(&dir, &with(list))).expect_err("rejected");
+            assert!(report.contains(pointer), "{list}: {report}");
+            assert!(report.contains(wanted), "{list}: {report}");
+        }
+
+        // A segment's own length is held to the same floor.
+        let short = GOOD.replace(r#""length_ms": 180000"#, r#""length_ms": 49"#);
+        assert_ne!(short, GOOD, "the segment line was not found");
+        let report = validate(&dir, &write(&dir, &short)).expect_err("rejected");
+        assert!(report.contains("/segments/0/length_ms"), "{report}");
+        assert!(report.contains("at least one tick, 50"), "{report}");
+        let tick = GOOD.replace(r#""length_ms": 180000"#, r#""length_ms": 50"#);
+        validate(&dir, &write(&dir, &tick)).expect("one tick is a segment");
+    }
+
+    /// The path rule's shared cases: `gamectl`'s reader runs the same file
+    /// through its own copy of the rule, so the two cannot part unseen
+    /// (decisions-log item 232 (7)).
+    #[test]
+    fn the_path_rule_answers_the_shared_cases() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask sits under the workspace root")
+            .to_path_buf();
+        let text = fs::read_to_string(root.join("crates/gamectl/tests/corpus/scenario-paths.txt"))
+            .expect("the shared path cases");
+        let mut accepted = 0_u32;
+        let mut refused = 0_u32;
+        for line in text.lines().filter(|line| !line.starts_with('#')) {
+            let (verdict, path) = line.split_once(' ').unwrap_or((line, ""));
+            assert!(
+                matches!(verdict, "accept" | "refuse"),
+                "`{line}` is neither an `accept` nor a `refuse` case"
+            );
+            let refuse = verdict == "refuse";
+            assert_eq!(leaves_the_repository(path), refuse, "`{path}`");
+            if refuse {
+                refused += 1;
+            } else {
+                accepted += 1;
+            }
+        }
+        assert!(
+            accepted >= 5 && refused >= 10,
+            "{accepted} accepted, {refused} refused"
+        );
     }
 
     #[test]

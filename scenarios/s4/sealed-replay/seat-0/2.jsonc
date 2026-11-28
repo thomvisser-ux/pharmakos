@@ -1,0 +1,51 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later AND (MIT OR Apache-2.0)
+//
+// expand_and_mine.jsonc: the Expand & Mine template (decisions-log item 81).
+//
+// It teaches the route and the economy: put a Mine beacon down covering a scrap
+// seam your spheres do not reach yet, and walk home while its drones dig. Spec
+// section 10's worked example, expand_east, is one filled-in copy of it.
+//
+// Where the beacon goes is a description, not a place (docs/design/
+// targeting.md; decisions-log item 127 (12)): "the nearest seam you do not
+// cover yet". The step reads it when it starts, from where your commander
+// stands, and the sim chooses a legal site whose sphere holds that seam. The
+// step walks there itself, so no walk comes before it. A carried copy reads it
+// again every round, so it never places a second beacon on a seam it already
+// covers.
+//
+// The wizard asks which seam: the description, or a seam by its name, such as
+// {"feature_id": "seam_241_131"}, which is what the built-in operator suggests.
+// A name is a fixed target for this map only; the description works on any.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {
+    "title": "Expand & Mine",
+    "author_kind": "BUILTIN",
+    "note": "Place a Mine beacon covering a scrap seam you do not cover yet, and walk home while it digs."
+  },
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      // Why: the step walks to the site it reads, so its timeout bounds the
+      // walk as well as the deploy.
+      {"label": "place_mine", "place_beacon": {"at": {"covering": {"seam": {"rank": "NEAREST", "coverage": "UNCOVERED"}}}, "tags": ["mine"],
+        // Initial settings are interface rows: each one commits on its own.
+        "initial": {"priority": "NORMAL", "mandate": {"roe": "RETURN_FIRE", "mine": {"dig_max_depth": 4, "flee_on_threat": true}}}},
+       "timeout_ms": 120000, "on_fail": {"action": "SKIP"}},
+      {"label": "back_home", "move": {"to": {"safest": {}}}}
+    ],
+    "handlers": [
+      // Why: bravery is an ordinary rule. Hurt and under fire, the commander
+      // walks back to safety and waits before carrying on.
+      {"id": "flee", "when": {"all": {"items": [{"cmdr_hp_pct": {"cmp": "LE", "pct": 40}}, {"cmdr_took_damage_within": {"ms": 3000}}]}},
+       "body": [{"label": "flee_to_safety", "move": {"to": {"safest": {}}}}, {"label": "flee_wait", "hold": {"ms": 8000}}],
+       "resume": "CONTINUE", "cooldown_ms": 30000, "max_fires": 3}
+    ]
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  // Why: an expansion is the most exposed thing a seat does, so the tail waits
+  // at the safest beacon rather than out at the new one.
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

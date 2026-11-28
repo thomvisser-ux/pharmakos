@@ -1,0 +1,73 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later AND (MIT OR Apache-2.0)
+//
+// hold_and_build.jsonc: the Hold & Build template (decisions-log items 81 and
+// 113 (6)).
+//
+// It teaches the grid: place a Build beacon covering a heat vent your spheres
+// do not reach yet, give it a Generator on that vent as its first Build target,
+// and hold by it while its drone builds. A Generator stands on a heat vent, and
+// it is how a seat's kW supply rises. The target is an initial setting, and
+// initial settings are interface rows the commander commits on site after the
+// deploy, so this is still touch to change.
+//
+// Where the beacon goes is a description, not a place (docs/design/
+// targeting.md; decisions-log item 127 (12)): "the nearest vent you do not
+// cover yet". The step reads it when it starts, from where your commander
+// stands, and the sim chooses a legal site whose sphere holds that vent; the
+// step walks there itself, so no walk comes before it. The Generator's anchor
+// is "the vent this beacon was placed to cover", `covered`, so the target
+// always names the vent the site was chosen for. Your starting vent lies
+// outside your core's sphere at every seed (decisions-log items 90 and 95),
+// which is why a new beacon is placed rather than a target added to the core.
+//
+// The wizard asks which vent: the description, or a vent by its name, such as
+// {"feature_id": "vent_324_16"}, which is what the built-in operator suggests.
+// A name is a fixed target for this map only; the description works on any.
+// A carried copy reads the description again every round, so it never places
+// a second beacon on a vent it already covers.
+//
+// The place-and-build shape is the owner's, confirmed at decisions-log item
+// 119 (9).
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {
+    "title": "Hold & Build",
+    "author_kind": "BUILTIN",
+    "note": "Easy, seat 1, round 1, told no seed (Easy draws nothing at random). A Build beacon covering the lean heat vent vent_329_331, at (342, 343, 29) as its site reads now, with a Generator on the vent as its first Build target: 140 points for 41 s of route (Easy fills 126 s of the segment)."
+  },
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [{"label":"deepen_core","interface":{"beacon":{"beacon_id":"b_00"},"rows":[{"set_mandate_settings":{"mine":{"dig_max_depth":4}}}]},"on_fail":{"action":"SKIP"}},
+      // Why: the step walks to the site it reads, so its timeout bounds the
+      // walk as well as the deploy.
+      {"label": "place_power", "place_beacon": {"at": {"covering": {"feature_id":"vent_329_331"}}, "tags": ["power"],
+        // Initial settings are interface rows committed on site after the
+        // deploy: choosing the Build mandate is free, and a Build target is
+        // its own row. The repair threshold is read as written: a structure
+        // of yours inside the sphere is repaired once it falls below half its
+        // hit points, and an omitted threshold would mean never (S2's plan,
+        // decision 38).
+        // PLACEHOLDER: the repair threshold, 50, a proposal — owner, at S3's demo
+        // Why: the two settings an omitted value would leave to the reader,
+        // written as they read (S1's demo, finding L): the beacon answers fire
+        // and starts none, and its mandate reshapes no terrain to place a
+        // target.
+        "initial": {"mandate": {"build": {"targets": [
+          {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}, "rotation_quarter_turns": 0, "order": 1}
+        ], "repair_threshold_pct": 50, "terraform": "NONE"}, "roe": "RETURN_FIRE"}}},
+       "timeout_ms": 53700, "on_fail": {"action": "SKIP"}},
+      {"label": "hold", "hold": {"ms": 79600}}
+    ],
+    "handlers": [
+      // Why: bravery is an ordinary rule. Hurt and under fire, the commander
+      // walks back to safety and waits before carrying on.
+      {"id": "flee", "when": {"all": {"items": [{"cmdr_hp_pct": {"cmp": "LE", "pct": 40}}, {"cmdr_took_damage_within": {"ms": 3000}}]}},
+       "body": [{"label": "flee_to_safety", "move": {"to": {"safest": {}}}}, {"label": "flee_wait", "hold": {"ms": 8000}}],
+       "resume": "CONTINUE", "cooldown_ms": 30000, "max_fires": 3}
+    ]
+  },
+  "on_death": {"on_respawn": "CONTINUE"},
+  // Why: after the hold, stay with the safest beacon and its drones.
+  "fallback": {"shadow": {"beacon": {"safest": {}}}}
+}

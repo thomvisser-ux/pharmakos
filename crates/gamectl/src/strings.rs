@@ -667,7 +667,10 @@ pub fn unreadable(what: &str, path: &str, why: &str) -> String {
 #[must_use]
 pub fn path_escapes(path: &str) -> String {
     let path = pharmakos_proto::json::grammar::escaped(path);
-    format!("`{path}` must be a path from the repository root, with forward slashes and no `..`")
+    format!(
+        "`{path}` must be a path from the repository root, with forward slashes, no empty or `.` \
+         part, no `:` and no `..`"
+    )
 }
 
 /// The rules table is missing a block the checks read.
@@ -1118,6 +1121,21 @@ pub fn nightly_arm_refused(seat: u8, path: &str, round: u32, codes: &str) -> Str
         "seat {seat}'s playbook `{path}` was refused by `submit_plan` in round {round} ({codes}). \
          A run over a seed file plays every playbook through the verifier's door and never the \
          harness's, so the arm is broken on this seed rather than a result."
+    )
+}
+
+/// A `sealed` seat's file that `submit_plan` refused. A `sealed` seat
+/// replays what a match sealed through the door a seat's own playbook is
+/// sealed through, so the harness door is not taken.
+#[must_use]
+pub fn sealed_replay_refused(seat: u8, path: &str, round: u32, codes: &str) -> String {
+    let path = pharmakos_proto::json::grammar::escaped(path);
+    format!(
+        "seat {seat}'s sealed playbook `{path}` was refused by `submit_plan` in round {round} \
+         ({codes}). A `sealed` seat replays what a match sealed, through the door a seat's own \
+         playbook is sealed through and never the harness's, so this is not the match those \
+         files came from: the map seed, the rules, the match's settings (`segment_lengths_ms`, \
+         `round_limit`), the other seats or this build differ from the ones it was played with."
     )
 }
 

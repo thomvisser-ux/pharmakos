@@ -8,8 +8,8 @@ owner approval, and the machine-checkable half lives in xtask/src/scenario.rs.
 
 # Scenario files
 
-**A scenario is a headless match written down.** Map seed, rules table, one
-playbook per seat, the segment list, and assertions on events **and** on the
+**A scenario is a headless match written down.** Map seed, rules table, each
+seat's playbooks, the segment list, and assertions on events **and** on the
 hash chain. The first three are AGENTS.md §4's triple — *"the sim is a pure
 function of (map seed, playbooks, rules hash)"* — which is what makes a
 committed hash chain a claim about the sim rather than about whatever happened
@@ -51,6 +51,50 @@ submitted it, and the chain that scenario pins was produced by a test that
 compiles a plan directly. A harness is for pinning what the sim does, including
 with orders the door would refuse; what it may not do is be quiet about it.
 
+### A `sealed` seat replays what a match sealed
+
+A match writes each seat's sealed playbook of each round to
+`seats/<seat>/sealed/<round>.jsonc` in its folder: what the seat submitted, or
+the safe playbook that was filed for it. Those files are the whole of what the
+seats put into the match, so a copy of them replays it (decisions-log item
+232). A **`sealed`** seat names a folder of them, `<round>.jsonc` for every
+round the scenario plays, counted from 1, and seals each in its round.
+
+Every file goes through `submit_plan`, the door a seat's own playbook is
+sealed through (a safe playbook the match filed goes through it here for the
+first time), and **the harness door is never taken for it**: a refusal fails
+the run (exit 3), naming the seat, the file and the round. A file the match
+sealed and the replay's door refuses means the replay is not that match
+(another seed, other rules, other match settings, which are
+`segment_lengths_ms` and `round_limit`, another seat's orders, or a build
+whose verifier reads the file differently), and a replay that sealed it anyway
+would pin a chain for a match nobody played. A round with no file is an
+invalid scenario (exit 2), and both readers name the first one missing; a
+file that cannot be read, or that is longer than the door takes, is an input
+error (exit 2) as well.
+
+What a replay reproduces is the chain. The feed is not the match's line for
+line: a round whose safe playbook was filed says so in the match
+(`safe_playbook_filed`) and is a submission in the replay.
+
+To keep a match as a scenario:
+
+* copy each seat's `sealed/` folder into the tree;
+* name the match's settings from `match.json` in its folder: the seed, the
+  round limit and the segment length list (`segment_lengths_ms`, below).
+  `match.json` holds the list the match was given, and an empty list there
+  means the rules table's `match.segment_lengths_ms`, which the scenario
+  writes out whole;
+* name, as `rules`, the table the match was played under: `match.json`'s
+  `rules_hash` is that table's hash, and under another table the replay is
+  refused or parts from the chain;
+* commit the match's own chain, the files of its `replay/` folder one after
+  the other, as the scenario's golden.
+
+`scenarios/s4/sealed-replay`
+is one: a match played through the external seat (`gamectl match`,
+docs/design/external-seat.md).
+
 ## Layout
 
 ```text
@@ -58,6 +102,7 @@ scenarios/
   README.md                        this file
   <set>/<name>.scenario.jsonc      one scenario
   <set>/<name>.playbook.jsonc      a playbook written for one scenario's map
+  <set>/<name>/seat-<n>/<round>.jsonc   what a `sealed` seat seals, round by round
   nightly/<arm>.scenario.jsonc     a nightly adversarial arm (nightly/README.md)
   nightly/seeds.txt                the seed set the nightly plays the arms over
 tests/golden/scenarios/<name>/     the hash chains and event logs it asserts on
@@ -125,8 +170,10 @@ that asserts something the build cannot do teaches the wrong thing twice over.)
 | `rules` | no | The rules table, repository-relative. Defaults to `rules/rules.v1.json` — see below. |
 | `round_limit` | no | The round the match ends on, an integer of 1 or more and never fewer than `segments`. Defaults to the sim's `DEFAULT_ROUND_LIMIT` (6, spec §3) — see below. |
 | `seats` | yes | One to three seats (spec §3), `seat` counting from 0 in array order. |
-| `seats[].kind` | yes | `playbook` (seals the named file), `safe` (files the safe playbook), `builtin` (the built-in operator, playing Easy). |
-| `seats[].playbook` | with `playbook` | Repository-relative path, forward slashes, no `..`. |
+| `segment_lengths_ms` | no | The match's segment length list, 1 to 8 lengths. Defaults to the lengths of `segments` — see below. |
+| `seats[].kind` | yes | `playbook` (seals the named file), `sealed` (seals a folder's `<round>.jsonc`, round by round), `safe` (files the safe playbook), `builtin` (the built-in operator, playing Easy). |
+| `seats[].playbook` | with `playbook` | Repository-relative path, by the path rule below. |
+| `seats[].sealed` | with `sealed` | Repository-relative path of a folder, by the same rule, holding `<round>.jsonc` for every round the file plays. |
 | `segments` | yes | One or more, `index` counting from 0. |
 | `segments[].length_ms` | yes | Game milliseconds, a positive bare integer (item 46), at most **480 000** — spec §3's "up to 8 minutes". |
 | `assertions` | yes | At least one, and see the pairing rule below. |
@@ -158,11 +205,22 @@ committed hash chain has to record which values produced it. A tuning PR that
 moves every scenario's chain is doing so legitimately; one that moves them
 without saying so is the failure AGENTS.md §4.8 is about.
 
+### The path rule
+
+Every path in a scenario file (`rules`, `seats[].playbook`, `seats[].sealed`,
+`golden`) is written from the repository root with forward slashes, with no
+empty or `.` part (so no leading, trailing or doubled slash, and never the
+empty path), no `:` and no `..`. A scenario names files in the tree and
+nothing outside it, one spelling a file. Both readers hold the rule, and each
+crate's tests run its copy over the same cases,
+`crates/gamectl/tests/corpus/scenario-paths.txt` (decisions-log item 232 (7)).
+
 ### The match settings
 
-One key names a match's settings beyond the triple, added in S1's first
-contract pull request (the register's S1-41), additively, under the same format
-string. Its sibling `units_per_seat`, the harness walkers each seat fielded,
+Two keys name a match's settings beyond the triple, each added additively
+under the same format string: `round_limit` in S1's first contract pull request
+(the register's S1-41), and `segment_lengths_ms` with the `sealed` seat
+(decisions-log item 232). `round_limit`'s sibling `units_per_seat`, the harness walkers each seat fielded,
 left the format with the walkers (the register's S2-16; S2's plan, decision
 23): G3′-real measures its load from E30's layout, never from them, so a file
 that still names the key is refused as an unknown key, and a load test lays
@@ -174,6 +232,16 @@ out its beacons and units through `Host::seed_layout` instead.
   it, and both readers refuse a limit below the file's segment count, named
   or the default, because a scenario plays no round past its limit: a file
   of seven segments has to name a limit of seven or more.
+* **`segment_lengths_ms`** — the match's segment length list, the lobby's
+  setting: round *i* takes the *i*-th length and rounds past the end take the
+  last. One to eight lengths (the sim's `MAX_SEGMENT_LENGTHS`), each a
+  segment's length by the rule below. Absent, the list is the lengths of
+  `segments`, which is what a match opened by a scenario has always been given.
+  The list is part of the match's hashed state, so a scenario that replays a
+  match played somewhere else states that match's list whole, even where the
+  file plays fewer rounds than the list has lengths: a lobby or `gamectl match`
+  match that named none took the rules table's `match.segment_lengths_ms`.
+  Both readers hold every segment to the length its round has in the list.
 
 Absent, both are what every chain committed before them was produced with, so
 adding the keys moved no chain; a scenario that names either is a claim about
@@ -186,6 +254,12 @@ before the first tick; both readers now refuse such a length with a pointer.
 The cap is the top of the rules table's `match.segment_lengths_ms` ladder, and
 `crates/gamectl/tests/parity.rs` fails when the ladder's top and the two
 readers' constant part.
+
+**A segment is at least one tick, 50 ms.** The gateway opens no match on a
+shorter one, so both readers refuse it in the file, with its pointer, in
+`segments` and in `segment_lengths_ms` alike (decisions-log item 232 (7)). The
+same test holds xtask's copies of the tick and of the list's eight lengths to
+the sim's.
 
 ### The assertion vocabulary
 
@@ -200,8 +274,7 @@ readers' constant part.
 of the match, which is not an assertion.
 
 `golden` is a repository-relative path under **`tests/golden/scenarios/`**,
-ending `.hashes.txt`, with forward slashes and no `..` — the same path rule as
-`seats[].playbook`. It need not exist yet: the task that first drives the run
+ending `.hashes.txt`, by the path rule above. It need not exist yet: the task that first drives the run
 commits the chain.
 
 The `scenarios/` part of that prefix is enforced by the runner and not by

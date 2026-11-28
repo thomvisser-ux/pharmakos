@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The path rule a scenario file's paths follow, as cases both readers answer:
+# `crates/gamectl/src/scenario.rs` and `xtask/src/scenario.rs` each hold a
+# `leaves_the_repository`, xtask being std-only, and each crate's tests run
+# its copy over this file, so the two cannot part unseen (decisions-log item
+# 232 (7)).
+#
+# One case a line: `accept` or `refuse`, one space, the path. A bare `refuse`
+# is the empty path. Lines that start with `#` are comments.
+accept a
+accept a.b
+accept a/b.c/d-e_f
+accept library/safe_playbook.jsonc
+accept rules/rules.v1.json
+accept scenarios/.hidden/seat-0
+accept scenarios/s4/sealed-replay/seat-0
+accept tests/golden/scenarios/sealed-replay/expected.hashes.txt
+refuse
+refuse /
+refuse .
+refuse ..
+refuse /scenarios/s4
+refuse scenarios/s4/
+refuse scenarios//s4
+refuse scenarios\s4
+refuse ./scenarios
+refuse scenarios/./s4
+refuse scenarios/s4/.
+refuse ../outside
+refuse scenarios/../scenarios/s4
+refuse scenarios/s4/..
+refuse a..b/seat-0
+refuse C:/match/seat-0
+refuse c:relative
+refuse scenarios/a:b

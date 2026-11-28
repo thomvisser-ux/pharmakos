@@ -144,6 +144,16 @@ playbooks), which adds their calls to the audit log beside the command's own.
 A harness that runs one command at a time never meets a held folder; one that does has a command
 still running, or one that was killed.
 
+## Keeping a match
+
+A match's folder holds what replays it: `seats/<seat>/sealed/<round>.jsonc` is what each seat
+sealed in each round, and `replay/<round>.hashes.txt` is the chain the round wrote. The scenario
+format's `sealed` seat kind seals those files again, round by round, through `submit_plan`, so a
+match worth keeping is committed as a scenario by copying the `sealed/` folders and the chain
+(`scenarios/README.md`, "A `sealed` seat replays what a match sealed"). A match `match new`
+started took the rules table's segment lengths (its `match.json` holds an empty list), so its
+scenario states them whole in `segment_lengths_ms`. `scenarios/s4/sealed-replay.scenario.jsonc` is such a match.
+
 ## Game text is data
 
 What these commands print is the game's text: template and library words, a notebook, a recap,
