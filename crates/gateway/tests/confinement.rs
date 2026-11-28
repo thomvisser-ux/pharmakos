@@ -1641,7 +1641,7 @@ fn driver_overreach(module: &str, lines: &[(usize, String)]) -> Vec<String> {
 /// and the fourth are made of the headless driver too, on the control
 /// module's terms.
 ///
-/// * **Nothing outside those three names a stepping call at all**, so a read
+/// * **Nothing outside those four names a stepping call at all**, so a read
 ///   handler cannot answer "what would happen" by making it happen.
 /// * **`surface.rs` reaches the runner only through `host_mut()`**, so there
 ///   is no second path to it in the file that drives it.
