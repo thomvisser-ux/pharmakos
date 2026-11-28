@@ -92,6 +92,33 @@ pub const IN_PROCESS_LIMITS: Limits = Limits {
     window_ticks: WINDOW_TICKS,
 };
 
+/// The caps for the **external seat**'s token: the one a headless host mints
+/// for a seat a program outside the game plays through `gamectl`
+/// ([`crate::serve::External`]; decisions-log item 231).
+///
+/// A headless match has no Lull timer and reports no host clock, so the
+/// gateway's tick stands still for the whole of a Lull and every call the
+/// program makes in it lands on one tick. A socket's [`CALLS_PER_TICK`] would
+/// refuse its ninth. These numbers are therefore **a Lull's budget**: at most
+/// this many calls between one Push and the next, counted, audited and
+/// fog-filtered like any other, and refused as `RATE_LIMITED` past it. Like
+/// [`IN_PROCESS_LIMITS`] it is a rate and never a read: the seat sees what a
+/// socket holding the same scopes sees.
+///
+/// What the cap is for: every call is one line in the audit log on the
+/// player's disk, so a program stuck in a loop is stopped at a bounded cost
+/// rather than left to fill it. What it does not do, said plainly: the count
+/// lives in the host's process, and `gamectl match call` is one process a
+/// call, so the turn-by-turn commands are bounded by the cost of starting a
+/// process and not by this number; the bridge (`gamectl match serve`) is.
+///
+/// PLACEHOLDER: an external seat's 1 200 calls a Lull — owner, at hardening, with the rate limits.
+pub const EXTERNAL_LIMITS: Limits = Limits {
+    per_tick: 1_200,
+    per_window: 1_200,
+    window_ticks: WINDOW_TICKS,
+};
+
 /// The two caps, so a test or a host can set them without touching the
 /// constants.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

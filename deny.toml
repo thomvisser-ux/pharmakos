@@ -110,6 +110,21 @@ deny = [
     { crate = "hierarchical_pathfinding", reason = "spec §15: avoided; HPA* is ours (G2 spike)" },
     { crate = "rmcp", reason = "spec §15: no MCP server in v1; the gateway stays internal" },
     { crate = "wasmi", reason = "spec §15: no script engine or script runtime in v1" },
+    # AGENTS.md section 7, with the external seat (decisions-log item 231): the
+    # game never starts, calls or pays for an AI and sends no telemetry, so no
+    # crate in the graph is an HTTP or TLS client. `Cargo.lock` is held to the
+    # same list by `crates/gamectl/tests/external.rs`.
+    { crate = "reqwest", reason = "AGENTS.md section 7: no HTTP client in any crate" },
+    { crate = "ureq", reason = "AGENTS.md section 7: no HTTP client in any crate" },
+    { crate = "hyper", reason = "AGENTS.md section 7: no HTTP client in any crate" },
+    { crate = "isahc", reason = "AGENTS.md section 7: no HTTP client in any crate" },
+    { crate = "attohttpc", reason = "AGENTS.md section 7: no HTTP client in any crate" },
+    { crate = "minreq", reason = "AGENTS.md section 7: no HTTP client in any crate" },
+    { crate = "surf", reason = "AGENTS.md section 7: no HTTP client in any crate" },
+    { crate = "curl", reason = "AGENTS.md section 7: no HTTP client in any crate" },
+    { crate = "rustls", reason = "AGENTS.md section 7: no TLS client in any crate" },
+    { crate = "native-tls", reason = "AGENTS.md section 7: no TLS client in any crate" },
+    { crate = "openssl", reason = "AGENTS.md section 7: no TLS client in any crate" },
 ]
 
 skip = [

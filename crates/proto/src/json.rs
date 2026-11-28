@@ -37,7 +37,7 @@ pub mod work;
 pub use codec::{
     Encoded, json_to_encoded, json_to_wire, wire_to_json, write_wire, write_wire_into,
 };
-pub use value::{Error, ErrorKind, Json, read, write};
+pub use value::{Error, ErrorKind, Json, read, write, write_line};
 
 use prost::{Message, Name};
 

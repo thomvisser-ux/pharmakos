@@ -29,6 +29,7 @@ const SOURCES: &[&str] = &[
     "src/docs.rs",
     "src/doctor.rs",
     "src/exit.rs",
+    "src/external.rs",
     "src/host.rs",
     "src/lib.rs",
     "src/lobby.rs",
@@ -811,8 +812,13 @@ fn nothing_here_writes_a_committed_golden() {
     }
     assert_eq!(
         writers,
-        vec!["src/scenario/nightly.rs", "src/scenario/run.rs"],
-        "two modules write a file: `run.rs` the fresh chain the `golden` step compares, and \
+        vec![
+            "src/external.rs",
+            "src/scenario/nightly.rs",
+            "src/scenario/run.rs"
+        ],
+        "three modules write a file: `external.rs` an ended match's last recap, into the \
+         match's own folder; `run.rs` the fresh chain the `golden` step compares, and \
          `nightly.rs` the result a run over a seed file writes to `--out`. A third writer is a \
          third place a golden could be written from"
     );
@@ -918,6 +924,26 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
         "round_limit.unwrap_or(default_limit)",
         "never read: an absent key is already the default, and a bad one is a problem \
          recorded above, so `load` returns no scenario",
+    ),
+    (
+        "external.rs",
+        "(\"--seed\", seed.unwrap_or(DEFAULT_SEED)),",
+        "the documented default: `match new` with no `--seed` (`OPTIONS`' row says so)",
+    ),
+    (
+        "external.rs",
+        "(\"--seats\", seats.unwrap_or(DEFAULT_SEATS)),",
+        "the documented default: `match new` with no `--seats`",
+    ),
+    (
+        "external.rs",
+        "(\"--seat\", seat.unwrap_or(DEFAULT_SEAT)),",
+        "the documented default: `match new` with no `--seat`",
+    ),
+    (
+        "external.rs",
+        "(\"--rounds\", rounds.unwrap_or(DEFAULT_ROUNDS)),",
+        "the documented default: `match new` with no `--rounds`, the lobby's round limit",
     ),
     (
         "nightly.rs",

@@ -332,6 +332,53 @@ pub fn write(value: &Json) -> String {
     out
 }
 
+/// A value as **one line** of JSON, with no line ending: the form for a
+/// stream that frames a message as a line (the external seat's bridge,
+/// `gamectl match serve`; decisions-log item 231).
+///
+/// The same lexemes and the same string escapes as [`write`], so [`read`]
+/// reads it back to the same value; only the layout differs. Every C0 control
+/// character inside a string is written escaped, a line feed among them, so
+/// the text holds no line break whatever the value holds.
+#[must_use]
+pub fn write_line(value: &Json) -> String {
+    let mut out = String::new();
+    write_value_on_a_line(value, &mut out);
+    out
+}
+
+fn write_value_on_a_line(value: &Json, out: &mut String) {
+    match value {
+        Json::Null => out.push_str("null"),
+        Json::Bool(true) => out.push_str("true"),
+        Json::Bool(false) => out.push_str("false"),
+        Json::Number(lexeme) => out.push_str(lexeme),
+        Json::String(text) => write_string(text, out),
+        Json::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                write_value_on_a_line(item, out);
+            }
+            out.push(']');
+        }
+        Json::Object(entries) => {
+            out.push('{');
+            for (index, (key, item)) in entries.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                write_string(key, out);
+                out.push(':');
+                write_value_on_a_line(item, out);
+            }
+            out.push('}');
+        }
+    }
+}
+
 fn indent(depth: usize, out: &mut String) {
     for _ in 0..depth {
         out.push_str("  ");
@@ -427,6 +474,32 @@ mod tests {
 
     use super::super::grammar::{LINEAR_KEYS, parse_counting};
     use super::{Error, Tree, read};
+
+    /// The one-line writer writes what the canonical writer writes, on one
+    /// line: it reads back to the same value, and no control character
+    /// reaches the text, whatever a string holds.
+    #[test]
+    fn the_one_line_form_reads_back_and_holds_no_line_break() {
+        let text = "{\"a\":[1,-2.5e3,true,null,{}],\"b\":\"one\\ntwo\\r\\tthree\\u0000 \\\"q\\\" \\\\\",\
+                    \"c\":{\"d\":[]},\"e\":\"\\u2028\"}";
+        let value = read(text).expect("a value");
+        let line = super::write_line(&value);
+        assert!(
+            !line.chars().any(char::is_control),
+            "a control character on the line: {line:?}"
+        );
+        assert_eq!(read(&line).expect("the line reads back"), value);
+        assert_eq!(
+            read(&super::write(&value)).expect("the canonical form reads back"),
+            value
+        );
+        assert_eq!(super::write_line(&read("[ ]").expect("empty")), "[]");
+        assert_eq!(super::write_line(&read("{ }").expect("empty")), "{}");
+        assert_eq!(
+            super::write_line(&read("{\"k\": [1, \"v\"]}").expect("a value")),
+            "{\"k\":[1,\"v\"]}"
+        );
+    }
 
     /// `read`, with how many key comparisons its duplicate-key check made.
     fn read_counting(text: &str) -> (Result<super::Json, Error>, u64) {

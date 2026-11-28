@@ -104,9 +104,10 @@ pub fn help() -> String {
         let _ = writeln!(text, "  {}  {meaning}", code.code());
     }
     text.push_str(
-        "\nThere is no `connect`. Nothing outside the game attaches to a seat in v1\n\
-         (AGENTS.md §11), and a flag that looked like one would be a promise this\n\
-         build does not keep.\n",
+        "\nThere is no `connect`: nothing attaches to a seat over a socket in v1 (AGENTS.md\n\
+         §11). The `match` commands are the one door for a program outside the game, the\n\
+         experimental external seat: a headless match the program starts itself, one seat\n\
+         with a seat's rights and no token. They may change in any release.\n",
     );
     text
 }
@@ -414,6 +415,114 @@ pub fn bad_value(flag: &str, given: &str, values: &[&str]) -> String {
         "{BINARY}: `{flag} {given}` is not a value it takes; it takes {}.",
         named.join(" or ")
     )
+}
+
+/// A flag whose value is not Unicode text, where the value goes on into text.
+#[must_use]
+pub fn flag_not_text(flag: &str) -> String {
+    format!("{BINARY}: `{flag}` takes text, and what was given is not Unicode.")
+}
+
+/// A command given without a flag it cannot do without.
+#[must_use]
+pub fn flag_missing(command: &str, flag: &str) -> String {
+    format!("{BINARY} {command}: no `{flag}` given, and it has no default.")
+}
+
+// ---------------------------------------------------------------------------
+// The external seat (`match`)
+// ---------------------------------------------------------------------------
+
+/// `match new` in a folder that already holds a match.
+#[must_use]
+pub fn match_exists(dir: &str) -> String {
+    let dir = pharmakos_proto::json::grammar::escaped(dir);
+    format!(
+        "{BINARY} match new: `{dir}` already holds a match. One folder holds one match: name a \
+         new folder, or go on with this one through the other `match` commands."
+    )
+}
+
+/// A `match` command in a folder that holds no match.
+#[must_use]
+pub fn match_missing(dir: &str) -> String {
+    let dir = pharmakos_proto::json::grammar::escaped(dir);
+    format!("{BINARY} match: `{dir}` holds no match. `{BINARY} match new --dir <dir>` starts one.")
+}
+
+/// A match's folder, or its config line, could not be made.
+#[must_use]
+pub fn match_folder(dir: &str, why: &str) -> String {
+    let dir = pharmakos_proto::json::grammar::escaped(dir);
+    format!("{BINARY} match new: the match's folder `{dir}` could not be made: {why}")
+}
+
+/// `match new` failed, and the config line it had written could not be
+/// removed: the folder still reads as a match, and the caller is told so.
+#[must_use]
+pub fn match_line_left(failure: &str, path: &str, why: &str) -> String {
+    let path = pharmakos_proto::json::grammar::escaped(path);
+    format!(
+        "{failure} And `{path}` could not be removed ({why}): remove it by hand, or the folder \
+         reads as a match that was never started."
+    )
+}
+
+/// A value `match new` cannot put on a config line at all.
+#[must_use]
+pub fn match_bad_value(flag: &str, given: &str) -> String {
+    let given = pharmakos_proto::json::grammar::quoted(given);
+    format!("{BINARY} match new: `{flag} {given}` is not a value it takes.")
+}
+
+/// A match the gateway would not open, in the gateway's words.
+#[must_use]
+pub fn match_refused(why: &str) -> String {
+    format!("{BINARY} match: the match could not be opened: {why}")
+}
+
+/// A match whose host stopped on a write it needed, in the gateway's words.
+#[must_use]
+pub fn match_stopped(why: &str) -> String {
+    format!("{BINARY} match: the match stopped: {why}")
+}
+
+/// A `match` command in a folder whose match has ended.
+#[must_use]
+pub fn match_ended(result: &str) -> String {
+    let result = pharmakos_proto::json::grammar::escaped(result);
+    format!(
+        "{BINARY} match: this match has ended, and an ended match is not taken up again. The \
+         seat's last recap is in `{result}`; `{BINARY} match brief` prints it."
+    )
+}
+
+/// The match ended and the seat's last recap could not be kept.
+#[must_use]
+pub fn match_result_unwritten(path: &str, why: &str) -> String {
+    let path = pharmakos_proto::json::grammar::escaped(path);
+    format!(
+        "{BINARY} match: the match has ended and the seat's last recap could not be written to \
+         `{path}` ({why}). The match's sealed playbooks and chains are in its folder."
+    )
+}
+
+/// `match serve`'s own pipe failed.
+#[must_use]
+pub fn match_pipe(what: &str, error: &std::io::Error) -> String {
+    format!("{BINARY} match serve: {what} failed ({error}); the match was put down first.")
+}
+
+/// The line `match brief` prints above one read's answer.
+#[must_use]
+pub fn match_brief_heading(method: &str) -> String {
+    format!("== {method} ==")
+}
+
+/// What `match brief` prints for a read the gateway refused.
+#[must_use]
+pub fn match_brief_refused(message: &str) -> String {
+    format!("(refused: {message})")
 }
 
 /// A flag that only means something beside another one, given without it.
