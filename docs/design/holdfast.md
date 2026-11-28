@@ -56,11 +56,12 @@ medium.
 
 1. Every machine runs a **rote**: a short numbered list of **cards**, each "when this reading, do
    that". The machine reads the list from the top on every beat, and the first card whose
-   reading is true acts. Everything a machine does is on a card the player can open: there is no
-   hidden behaviour behind the list, and a Sentry with no true card holds its fire.
-2. A card reads only what that machine's own sensors read, and acts only through what that
-   machine has. Nothing arrives clever: a card may use only the words that the grade in force at
-   its Stake allows (section 6).
+   reading is true acts (from Mark, the first true card for each of fire and signal, section 12).
+   Everything a machine does is on a card the player can open: there is no hidden behaviour
+   behind the list, and a Sentry with no true card holds its fire.
+2. A card reads only what its machine's own sensors read and the marks sent to it, and acts only
+   through what that machine has. Nothing arrives clever: a card may use only the words that the
+   grade in force at its Stake allows (section 6).
 3. The commander's **playbook** is unchanged, and it is also how a rote travels: the commander
    installs a rote at a Stake by hand, as one more row of a visit, and the sealed playbook
    carries the rote inside it.
@@ -105,8 +106,11 @@ decided.*
 - **The press key** is the Keybearer's. It never leaves a hand and is never sent. Pressing it to a
   key-core is the one act by which a seat raises a Stake's pressed record. The key dies with its
   bearer: an enemy cannot take it.
-- **A challenge** is a short sealed question and answer between a machine and what it sees, by
-  line of sight. It uses no network and cannot be overheard. Every unit of a seat, and its
+- **A challenge** is a short sealed question and answer between a machine and what it sees. It
+  reaches what the Sentry's sensor sees through the sim's existing sight seam, which is
+  radius-only today (decisions-log item 144 (4)); a real line-of-sight model is later work for
+  that seam, with S4's second half, when each machine senses for itself. It uses no network and
+  cannot be overheard. Every unit of a seat, and its
   Keybearer, answers that seat's challenges: a unit is given the answer where it is made. Units
   hold no grade of their own.
 - **A mark** is data, never an order: a card may weigh it. Marks travel by buried cable
@@ -184,7 +188,8 @@ traffic an enemy has turned against it, so both arrive with radio (section 11).
 ## 7. Surety: one press that covers neighbours (after the three towers)
 
 *Surety is ruled, with its price, and is built after the three towers (item 229, point 57); its
-price was settled by network access control (point 69). Its mechanics are decided.*
+price on the cable network was settled for its wards by network access control (point 69). Its
+mechanics are decided.*
 
 A Keybearer may **underwrite** a Stake it has vouched by hand: one more press there. The pledge
 is a **surety**; the Stake that carries it is a **guarantor**; a Stake it covers is its **ward**.
@@ -206,6 +211,9 @@ pressed a pledge at the guarantor that covers its holding, and the Ledger accept
   commissioned until a hand vouches for it, and a ward later vouched by hand stops being a ward.
   Surety buys Challenge for a whole cluster with one walk; the network is only for Stakes a hand
   has vouched one by one. Whether the guarantor itself may be commissioned is open (section 20).
+- **The price on radio.** Point 57's price as put, that "that Stake and the ones it covers can
+  then never join the radio network", stands for radio until the radio batch says otherwise (the
+  main session's reading; section 20).
 
 ## 8. The network: buried cable
 
@@ -214,7 +222,8 @@ counterplay until radio arrives (item 229, point 65, on the owner's points 59 an
 access control is ruled as below (point 69). The engineering is decided.*
 
 **What a cable is.** A run of cable voxels, one per column, a set depth below the surface, between
-two of a seat's Commissioned Stakes. It is its own kind of build target and its own material, not
+two of a seat's Stakes; it carries marks only between Stakes on the seat's roll (network access
+control, below). It is its own kind of build target and its own material, not
 a wall: a wall is an upright box at least two voxels high, and enemy raiders look for walls to
 breach. Build drones dig the trench, lay the cable and cover it, at a price and a time per voxel
 of length, so only a Stake with a Build writ lays or re-lays cable, and only inside its own
@@ -280,7 +289,9 @@ rest of this section is the main session's reading and additions (decided; the o
 With one Keybearer per seat today, that is its Keybearer's death; when the roster arrives (S5),
 it is the death of the last one. There is no respawn, so the respawn delay, the death counter and
 the playbook's on-death options go. The existing defeat rule stays beside it: a seat with no
-Stakes left is also defeated.
+Stakes left is also defeated. The last Keybearer's elimination runs the elimination the sim
+already has: the seat's units disband, its structures become ruins, its kill credit drops and its
+licences are void (the main session's reading; the owner can veto).
 
 What follows from it:
 
@@ -289,13 +300,16 @@ What follows from it:
 - **It changes how a match ends,** so it moves every recorded match, and it is built as its own
   reviewed change, early in the three towers (`s4-plan.md`, step 1).
 - **Whether a raw Sentry fires on its own seat's Keybearer is open**: the owner deferred it (item
-  229, point 70). The build keeps the choice as one rules-table value, so either answer is a change
-  of data. The first build carries "does not fire" (the main session's choice, told to the owner):
-  the spec says the key-core "only cares that it is physically present", so it senses the key, and
-  even an Unkeyed Stake's machines stay quiet for the bearer of their seat's key. Without that,
-  walking into one's own arc would lose the match on the spot, sometimes with no warning, because
-  the Ledger's arc warnings are rough. A seat's drones and units stay in danger from its raw
-  Sentries either way.
+  229, point 70), and it is held. The build keeps the choice as one rules-table value, so either
+  answer is a change of data. The main session's provisional proposal for the first build that has
+  Sentries is "does not fire"; it is a proposal, not a setting. Its reasons: the spec says the
+  key-core "only cares that it is physically present", so it senses the key, and even an Unkeyed
+  Stake's machines would stay quiet for the bearer of their seat's key; without that, walking into
+  one's own arc would lose the match on the spot, sometimes with no warning, because the Ledger's
+  arc warnings are rough. The owner is asked before the first build that includes Sentries:
+  slice 1's pull request does not merge with a value the owner has not seen, and until then the
+  rules row is a `PLACEHOLDER` naming the owner (`s4-plan.md`, section 3). A seat's drones and
+  units stay in danger from its raw Sentries either way.
 
 ## 10. The first round is a match setting
 
@@ -325,8 +339,9 @@ one; hunt the Keybearer, and every press waits (and, by section 9, the match may
 
 **When radio arrives.** *Ruled: radio is deferred out of the three towers and arrives in S4's
 second half, when emissions matter and each machine knows only what its own sensors pick up and
-what is sent to it as a mark (item 229, points 60 to 63).* What follows is direction only, the
-main session's, to be designed in detail then and brought to the owner as its own batch:
+what is sent to it as a mark (item 229, points 61 to 63, on the question of point 60).* What
+follows is direction only, the main session's, to be designed in detail then and brought to the
+owner as its own batch:
 
 - Radio is reach without cable: across open ground, and to anything that moves. It needs the
   spec's Signal spar (the Radio Mast), which stays where the spec has it and is not in the three
@@ -366,7 +381,8 @@ main session's, to be designed in detail then and brought to the owner as its ow
   be saved to the player's local library and loaded in a later match.
 - **The arc** is drawn on the map in the editor and during the Push. The Ledger warns when an arc
   may cover the seat's own Stakes, seams or route, with a Fix that turns the Sentry. Turning a
-  standing Sentry is an interface row, not a rebuild.
+  standing Sentry is the install row again, with a facing: an install on a tower that already
+  holds that rote changes only the facing. It is not a rebuild.
 - **The recap line**: "Sentry 2 fired on card 1 (motion in arc) and destroyed your Scout." A
   Ledger memo explains a seat's first friendly fire.
 
@@ -413,7 +429,7 @@ main session's, to be designed in detail then and brought to the owner as its ow
 | Question | Answer |
 |---|---|
 | What makes a unit answer a challenge? | It belongs to the seat. Units are given the answer where they are made. |
-| Does a raw Sentry fire on its own Keybearer? | Open: the owner deferred it (item 229, point 70). The first build is set to "no", as one rules-table value (section 9). A raw Sentry does fire on its seat's drones and units. |
+| Does a raw Sentry fire on its own Keybearer? | Open: the owner deferred it (item 229, point 70). It is one rules-table value; the main session proposes "no" for the first build with Sentries, and the owner is asked before that build (section 9). A raw Sentry does fire on its seat's drones and units. |
 | What happens when my Keybearer dies? | If it was the seat's last, the seat is defeated (section 9). Nobody comes back. |
 | What rote does a new machine run? | The one last installed at its Stake for its kind; otherwise its kind's basic rote. |
 | A Stake under two guarantors loses one. | Nothing changes until the last is gone. |
@@ -433,7 +449,7 @@ main session's, to be designed in detail then and brought to the owner as its ow
 | A Sworn Stake loses every join. | The oath stays on the record and is out of force: the Stake works as Vouched until Commissioned is in force again. |
 | Can the Ledger refuse to enter a Stake? | No. Every Stake standing at the settlement is entered, lit or dark, attacked or not. |
 | Can the enemy see which Stake is my guarantor? | Not directly. It sees grades in force on Stakes it can see, and can guess from the map. |
-| Does trust carry between matches? | No. Rotes do: a player's rotes are files in their library. Whether anything else carries over is open (section 20). |
+| Does trust carry between matches? | Not in the three towers (the main session's call; the owner can veto). Rotes do: a player's rotes are files in their library. What carries between matches is the owner's open question (points 22 and 23, item 226; section 20). |
 | Does a commander's rank carry between matches? | Open, for S5 (section 20). |
 
 ## 15. Engineering decisions
@@ -462,7 +478,9 @@ main session's, to be designed in detail then and brought to the owner as its ow
 - **The Ledger's arc warnings say "may"**: it checks straight legs between the places a playbook
   names, holds no pathfinder and never predicts what will cross an arc (section 13).
 - **A press row is safe to repeat**: a visit interrupted and resumed pays again and presses
-  nothing twice. Install and press take the last two short interface-row numbers.
+  nothing twice. There are two new interface rows, numbers 8 and 9: **install** (which also
+  carries a facing, so turning a standing Sentry is an install) and **press**, whose kind field
+  names the press (vouch, commission, underwrite, oath, strike), so every kind shares one row.
 - **The settlement's new act (enter) runs after the licence check.**
 - **Grade and cable events are private to their owner.** Shipped event names keep their names; new
   kinds and reasons are added at the end (AGENTS.md section 5, the event vocabulary).
@@ -578,21 +596,27 @@ lore pass decides whether they share the word.
 
 ## 20. Open questions
 
-Each is the owner's, and is held in `decisions-log.md` item 229 (12) unless it says otherwise.
+Items 1 to 7 are the owner's questions, each held in `decisions-log.md` item 229 (12). Item 8
+lists calls the main session has decided, which the owner can veto.
 
 1. **Whether a raw Sentry fires on its own seat's Keybearer** (item 229, point 70; deferred by the
-   owner). The first build carries "does not fire" as one rules-table value.
-2. **Whether a guarantor may be commissioned.** The ruling (point 69) names the wards; the
-   design's earlier wording ("a guarantor and its wards cannot be commissioned") is wider. It
-   matters only once surety is built, in S4's second half.
+   owner). It is one rules-table value. The main session's provisional proposal for the first
+   build with Sentries is "does not fire"; the owner is asked before slice 1 merges (section 9).
+2. **Whether a guarantor may be commissioned.** The ruling (point 69) bars only the wards; point
+   57's price as put covered the guarantor too, and the design's earlier wording ("a guarantor and
+   its wards cannot be commissioned") is wider. It matters only once surety is built, in S4's
+   second half.
 3. **The radio batch:** Lapsed, Outcast, tamper, forged marks, whether a seat may cast out its own
-   Stake, and what radio is for when cable reaches everywhere a seat holds.
+   Stake, what radio is for when cable reaches everywhere a seat holds, and whether point 57's
+   price as put still binds radio (until that batch says otherwise it stands, on the main
+   session's reading; section 7).
 4. **Bound's form** (section 16), for S5.
 5. **Whether a commander's rank, and anything else, carries between matches.** The owner's points
    22 and 23 (item 226) leave it open.
 6. **The lore pass's checks** (section 19).
 7. **The form of the starter bots** (item 229, point 46).
-8. **Smaller calls made here,** each the owner's to overrule: an enemy sees a Stake's grade in
-   force and nothing else; "licence" stays the word for a structure's unlock; slice 3's Mark is
-   built although, until each machine senses for itself, its only use is firing outside a
-   Sentry's own arc.
+8. **Smaller calls made here, decided; the owner can veto each** (not held in item 229 (12)): an
+   enemy sees a Stake's grade in force and nothing else; "licence" stays the word for a
+   structure's unlock; slice 3's Mark is built although, until each machine senses for itself,
+   its only use is firing outside a Sentry's own arc; trust does not carry between matches in the
+   three towers (section 14).

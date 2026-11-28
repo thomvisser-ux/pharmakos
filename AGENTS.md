@@ -45,10 +45,11 @@ to change anything is to walk the **commander** to a **beacon** and interface on
 change*. Beacons are the unit of power and carry **mandates** (Build, Defend, Attack, Mine, Survey);
 units and buildings run **programs**; money is `$` and power is `kW`; the world is destructible
 voxels under a permanent ash sky. Radio exists only once a Radio Mast is earned, carries data and
-never control, and is treated as untrusted input. From S4, trust in a beacon's machines is earned per
-beacon, by the commander's own hand (its **holdfast**), and a seat's beacons pass marks by buried
-cable before radio (decisions-log item 229; `docs/design/holdfast.md`). Everything is deterministic, seeded and hashed, so
-a match replays bit-for-bit on every platform.
+never control, and is treated as untrusted input. From S4, trust in a beacon's machines is earned
+per beacon, by the commander's own hand (its **holdfast**; surety and the first round's match
+setting are the exceptions), and a seat's beacons pass marks by buried cable before radio
+(decisions-log item 229; `docs/design/holdfast.md`). Everything is deterministic, seeded and
+hashed, so a match replays bit-for-bit on every platform.
 
 ## 2. The v1 rule
 
@@ -58,8 +59,9 @@ Three levels of behaviour ship built-in and native: the commander's **operator**
 playbook, files the safe playbook on a miss, executes whatever the seat sealed), the beacons'
 **mandates**, and the units' and buildings' **programs**. Programs are built in until S4's rule
 cards; from then a program is a **rote**, a short numbered list of rule cards that the player can
-open, edit and write, and each kind of machine ships a basic rote as its built-in default (the
-basic tower's first; decisions-log items 227, point 36, and 229; `docs/design/holdfast.md`). Until
+open, edit and write (the main session's design; the owner can veto), and each kind of machine
+ships a basic rote as its built-in default (the basic tower's first; decisions-log items 227,
+point 36, and 229; `docs/design/holdfast.md`). Until
 S4's rule cards the player authors exactly one thing, the playbook, a JSONC file (canonical `gp.v1`
 proto JSON plus comments) written in the in-game editor or by hand; from then the player authors
 the playbook **and the rotes it carries** (decisions-log item 229, on the owner's points 20, 28 and
@@ -765,10 +767,11 @@ of that premise.
 - **Secrecy.** Playbooks, drafts, the seat notebook and the private replay cache never leave the
   gateway for another seat. On a local host this is enforcement, not cryptography: the private match
   cache is plain local state, and the spec says so out loud. Do not claim more.
-- **No filesystem or network access through playbooks or rule cards.** A playbook is data with a
-  closed vocabulary, and so is a rule card (§2, decisions-log item 227). There is no verb that reads
-  a path, opens a socket, shells out or loads code, in either, and none may be added. The template/sample library is a local folder the gateway *reads* to list and
-  instantiate; nothing in it executes.
+- **No access to the host's filesystem or the host's network through playbooks, rule cards or
+  rotes.** A playbook is data with a closed vocabulary, and so are a rule card and a rote (§2,
+  decisions-log items 227 and 229). There is no verb that reads a path, opens a socket, shells out
+  or loads code, in any of them, and none may be added. The template/sample library is a local
+  folder the gateway *reads* to list and instantiate; nothing in it executes.
 - **A player's text is quoted wherever a person is shown it.** Where a person is shown a sentence
   built by `proto`, `plan-core`, the verifier or the gateway, a player's text in it is quoted:
   `Quoted` is the text escaped and capped, and `Said` is built from a `&'static str`, a number, a

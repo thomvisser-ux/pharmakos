@@ -34,7 +34,14 @@ replaced by holdfast and radio replaced by buried cable (item 229, points 56, 57
 
 **What the owner plays at the close.** The owner's part is ruled (item 227, point 39): the
 milestone closes when the owner has played the three-towers build and says whether writing a
-tower's program is readable and fun. That verdict is the milestone's gate. The close is a
+tower's program is readable and fun. That verdict is the milestone's gate.
+
+**The fun gate** falls at the three towers' close, and the owner's verdict at that close (item
+227, point 39) is its test; this placing is the main session's reading of item 227, and the owner
+can veto it. The stage's named depth task (AGENTS.md section 10 item 6) is the three towers, its
+embedded gate is the fun gate, and F1 to F3 (section 9) are that gate's written fallbacks.
+
+The close is a
 milestone review inside S4, not a stage demo: the merge delegation runs through both halves of S4
 to S4's stage demo, and the owner can revoke it at the three towers' close, as at any time (item
 228, point 42).
@@ -45,7 +52,7 @@ tags"). It goes on the merge commit of a pull request that does nothing but set 
 
 **The version on `main`.** Between tags, `main` carries `0.4.0-dev` throughout S4, over a
 `## 0.4.0-dev` changelog section that collects what lands (AGENTS.md section 9, "Versions and
-tags"); its own pull request (#262) sets it, and it merges before any new work.
+tags"); its own pull request (#262) set it and merged before any new work.
 
 **Machine-checkable at the close** (AGENTS.md section 10, as it applies to a milestone; the stage
 close at S4's demo applies all of it): `cargo xtask ci` green on the matrix; every moved chain and
@@ -72,7 +79,8 @@ first (`proto/**`, `rules/rules.v1.json`); then the sim; then the verifier and p
 gateway; then the operator and `library/`; then the client (`crates/client-gdext`, `godot/`). A
 slice may be one vertical lane whose review count is set by its riskiest file (item 227, point
 30); it merges in that order either way, and two lanes share a crate only when their briefs name
-disjoint files (AGENTS.md section 6).
+disjoint files (AGENTS.md section 6). Step 1 cannot take this order and lands as one vertical
+pull request (step 1, below).
 
 **Review class.** Every step below touches `crates/sim/**`, `proto/**`, `rules/**`, a golden's
 content or a section 5 contract path, so every one gets **two reviews** with different lenses
@@ -83,13 +91,19 @@ riskiest path that set it.
 
 **What it gives.** A local program (the main session's AI first) can take a seat headless with
 exactly a seat's rights, fog-filtered, rate-limited and logged, and play many fast matches against
-Easy; a headless match runs about 10 times real time (item 229, point 44). Its results are
-recorded, not used to tune (item 227, point 35).
+Easy; a headless match runs about 10 times real time, an estimate given with point 44's question,
+not a measurement (item 229, point 44). Its results are recorded, not used to tune (item 227,
+point 35).
 
 **Its own plan.** It is its own contract pull request, with its own brief. It carries the rule
 changes that points 44 and 47 approve: AGENTS.md sections 2, 7 and 11 and CLAUDE.md "Permissions",
 including the definition of "a real seat" (item 229 (1)). This plan does not design it; it only
 needs the harness to report the counts of section 7 for each slice.
+
+**Crates.** `gamectl` (the headless match commands and the pipe-based bridge), `gateway` (the
+third seat kind, its token and scopes), and `proto` if the seat kind is on the `gp.api.v1` wire;
+its own plan designs each. A new seat kind with its own token is security-class (AGENTS.md
+section 7), so it takes the adversarial review of a security change.
 
 ### Step 1: the defeat rule
 
@@ -98,49 +112,67 @@ with one Keybearer per seat, that is its Keybearer's death. Nobody comes back. A
 Stakes left is still defeated (item 229, point 68; the second rule is the main session's
 reading).
 
-**Crates.** `proto` (the playbook's required `on_death` block, `gp.v1` field 4, and its
-`on_respawn` options, which go; fields are never renumbered or reused, so they are reserved, and
-the pull request states how Load answers a file that still names them), `sim` (the respawn, its
-delay and the death counter go; the defeat condition), `verifier` and `plan-core` (the block's
-checks and its prose), `gateway` (the recap and the match's end), `operator` and `library/` (every
-library playbook carries the block), and the client and `godot/` (its fixtures and the new
-playbook template carry the block).
+**Crates.** `proto` (the playbook's required `on_death` block, `gp.v1` field 4, with its
+`on_respawn` options and its `max_deaths_before_fallback` field; the condition vocabulary's
+`cmdr_deaths`; and the fallback's "out of deaths" path: all go), `sim` (the respawn, its delay and
+the death counter go; the defeat condition), `verifier` and `plan-core` (the block's checks and
+its prose; the retired codes), `gateway` (the recap and the match's end), `operator` and
+`library/` (every library playbook carries the block), `gamectl` (the scenario files and `gamectl
+docs`), and the client and `godot/` (its fixtures and the new playbook template carry the block).
+Fields are never renumbered or reused, so each retired field has its number **and its name**
+reserved (`buf breaking` runs in `WIRE_JSON` mode), and Load refuses a playbook that still writes
+one, with a code and a JSON Pointer (AGENTS.md sections 5 and 11). Point 68's answer begins "For
+now", so a later respawn rule would take new field numbers; the reserved ones are never reused.
+
+**One vertical pull request.** Step 1 lands as one pull request carrying the proto, the sim, the
+verifier, the gateway, the operator, `library/`, `examples/` and the goldens together (item 227,
+point 30), not in section 2's proto-first order: a proto-first pull request would make every
+committed playbook that writes `on_death` fail Load.
 
 **Contract surface.** The event vocabulary: `commander_respawned` (`EventKind`, id 11) is retired,
 and its id is never reused (AGENTS.md section 5). AGENTS.md section 11's v1 vocabulary names
 `on_death`, so that line changes with this pull request. The spec's section 4 "Death" rule is
 superseded by item 229 and is brought in line here.
 
-**What moves (expected).** Every scenario chain in which a commander dies, and every match whose
-end it changes; the golden playbooks and every verifier report golden that holds an `on_death`
-block; the snapshot version and the save format if the death counter or the pending respawn
-leaves the snapshot. Each chain that moves is named, with this rule as the reason.
+**What moves (expected).** Every committed chain (every scenario chain, the determinism chain and
+the cross-OS artefacts), because the seat row's death count and respawn tick leave the state hash;
+the snapshot version and the save format version, for certain; the golden playbooks and every
+verifier report golden that holds an `on_death` block; the diagnostic catalogue and the
+`render_plan` prose goldens; and the generated goldens every proto change moves (the prost tree,
+`get_schema`'s answer and `gamectl docs`). Each chain that moves is named, with this rule as the
+reason.
 
-**The harness counts** before it is closed: commander deaths to the seat's own fire (zero is
-expected while point 70's value is "does not fire", section 3).
+**The harness counts** before it is closed: commander deaths to the seat's own fire (point 70's
+value, section 3, decides whether a raw Sentry adds to it once slice 1 lands).
 
 ### Step 2: slice 1, the Sentry and raw cards
 
 **What the player can do when it merges.** Place a Sentry facing north, east, south or west; open
 its rote (`sentry.basic`, one card) in the editor's rule list, edit or reorder the cards and have
 the commander install it at the Stake by hand; see the arc on the map in the editor and in the
-Push; turn a standing Sentry by an interface row. A raw Sentry fires on anything that moves in its
-arc, the seat's own drones and units included. The recap names the Sentry, the card and the
-reading; a Ledger memo explains the first friendly fire. Every Stake behaves as Unkeyed
-(`holdfast.md`, sections 12 and 17).
+Push; turn a standing Sentry by the install row again, with a facing. A raw Sentry fires on
+anything that moves in its arc, the seat's own drones and units included. The recap names the
+Sentry, the card and the reading; a Ledger memo explains the first friendly fire. Every Stake
+behaves as Unkeyed (`holdfast.md`, sections 12 and 17). The Sentry's starter rote, which the player
+can open and edit, is the start inside this milestone that point 46's direction asks for
+(section 6).
 
-**Crates.** `proto` (the rote and card messages and the install row in `gp.v1`; the Sentry's rows
+**Crates.** `proto` (the rote and card messages and the install row, interface row 8, which
+carries a facing, in `gp.v1`; the Sentry's rows
 in the rules table; the events and the view feed's Sentry in `gp.api.v1`), `rules/`, `sim` (the
 Sentry, its seat-blind fire, the card evaluator, installed rotes as match state, the new events),
 `verifier` and `plan-core` (the cards' checks, a card's size counted honestly, the arc warnings
 with their Fix, the rotes' JSONC round-trip and prose), `gateway` (the wire, the recap lines),
 `operator` and `library/` (`library/rotes/` with `sentry.basic`; Easy places Sentries facing away
 from its own holdings, recorded and not tuned), `bench` (a card-heavy case for the verifier's
-timing gate), and the client (the rule list's rote editing and the arc).
+timing gate), `gamectl` (the scenario files and `gamectl docs`), and the client (the rule list's
+rote editing and the arc).
 
 **What moves (expected).** The snapshot version and the save format (installed rotes are hashed,
 saved state; AGENTS.md section 4.8); every verifier report golden (the rules table gains rows, the
-snapshot gains facts); the event vocabulary, additively. Chains move where a Sentry stands; new
+snapshot gains facts); the diagnostic catalogue and the `render_plan` prose goldens; the generated
+goldens (the prost tree, `get_schema`'s answer and `gamectl docs`); the event vocabulary,
+additively. Chains move where a Sentry stands; new
 tables are hashed as blocks after their rows (item 136), so a match with no Sentry keeps its chain.
 Once Easy places Sentries, every scenario with a built-in seat and the nightly result move.
 
@@ -159,14 +191,15 @@ a standard match Cold start; item 229, point 58). The Ledger refuses what can ne
 about what may not, and offers Fixes (`holdfast.md`, section 13). A player's rote can be saved to
 the local library and loaded in a later match.
 
-**Crates.** `proto` (the vouch press row, the match setting, the new events and failure reasons,
+**Crates.** `proto` (the press row, interface row 9, whose kind field names the press, vouch
+first; the match setting, the new events and failure reasons,
 the grade in the view feed), `rules/`, `sim` (the pressed record, the Ledger's entry at the
 settlement after the licence check, the vouch, Challenge, the skipped-card rule), `verifier` and
 `plan-core` (the refusals, warnings and Fixes, by the same shared function the sim uses for
 grades), `gateway` (the setting in `match.json`, the config line and the save; the fog rule that
 an enemy sees only a Stake's grade in force), `operator` and `library/` (`sentry.iff`; whether
-Easy vouches), and the client (the holdfast mark, the setting in the lobby, the editor's
-per-grade view).
+Easy vouches), `gamectl` (the scenario files and `gamectl docs`), and the client (the holdfast
+mark, the setting in the lobby, the editor's per-grade view).
 
 **Contract surface.** The match setting is the first lobby option that changes the match itself,
 so one contract pull request names every format it reaches: `match.json`, the config line in
@@ -174,13 +207,15 @@ so one contract pull request names every format it reaches: `match.json`, the co
 
 **What moves (expected).** Every committed match's chain, since every match reaches a settlement
 and enters its Stakes (`holdfast.md`, section 17); the snapshot version and the save format; every
-verifier report golden; once Easy vouches, the nightly result and every scenario with a built-in
+verifier report golden; the diagnostic catalogue, the `render_plan` prose and the generated
+goldens; once Easy vouches, the nightly result and every scenario with a built-in
 seat.
 
 ### Step 4: slice 3, buried cable and Mark
 
 **What the player can do when it merges.** Order build drones at a Build Stake to lay buried cable
-between two Commissioned Stakes inside its holding; commission a Stake vouched by hand, putting it
+between two of the seat's Stakes inside its holding, which carries marks only between Stakes on
+the roll; commission a Stake vouched by hand, putting it
 on the seat's roll; install `sentry.mark`, which posts unanswered contacts as marks and may fire
 on a marked contact inside its gun's range and outside its own arc; see a cut reported once with
 where it happened, a quarantined Stake work as Vouched, and drones re-lay a cut length when the
@@ -188,14 +223,16 @@ writ is set to rebuild (`holdfast.md`, section 8). Two or more cards may act on 
 first true card wins each of fire and signal" arrives here.
 
 **Crates.** `proto` (the cable build target, which needs a second end beside a Build target's one
-anchor; the commission press; the cable's price and depth rows; the material table and the cable
-events in `gp.api.v1`), `rules/`, `sim` (the cable target and material, the digs that skip a seat's
-own cable, the roll, the joins and quarantine once a tick, Mark, the once-only cut report), the
-verifier and plan-core (the cable refusals and warnings), `gateway` (the material table, the
-events), and the client (the material's palette row, the seat's own cables on its map, Mark).
+anchor; the press row's commission kind; the cable's price and depth rows; the material table
+and the cable events in `gp.api.v1`), `rules/`, `sim` (the cable target and material, the digs
+that skip a seat's own cable, the roll, the joins and quarantine once a tick, Mark, the once-only
+cut report), the verifier and plan-core (the cable refusals and warnings), `gateway` (the
+material table, the events), `gamectl` (the scenario files and `gamectl docs`), and the client
+(the material's palette row, the seat's own cables on its map, Mark).
 
 **What moves (expected).** The snapshot version and the save format (cable rows and the stored
-once-only bit); the material table and its client pin; every verifier report golden; chains where
+once-only bit); the material table and its client pin; every verifier report golden; the
+diagnostic catalogue, the `render_plan` prose and the generated goldens; chains where
 cable is laid or a Stake is commissioned; and, if Easy commissions, the nightly result and every
 scenario with a built-in seat.
 
@@ -207,12 +244,16 @@ owner's verdict (section 1).
 
 ## 3. Point 70's value
 
-The owner deferred whether a raw Sentry fires on its own seat's Keybearer (item 229, point 70).
-The build keeps the choice as **one rules-table value**, read by the sim's Sentry fire, so either
-answer is a change of data, not of code. **The first build carries "does not fire"**: the main
-session's choice, told to the owner and not asked (item 229, point 70's record; the owner can
-change it), so that a test match is not lost to one's own tower. Its row lands in slice 1's proto
-and rules pull request, and its source carries the marker
+The owner deferred whether a raw Sentry fires on its own seat's Keybearer (item 229, point 70),
+and the question is held. The build keeps the choice as **one rules-table value**, read by the
+sim's Sentry fire, so either answer is a change of data, not of code. **The main session's
+provisional proposal** for the first build that has Sentries is that a raw Sentry does not fire
+on its own seat's Keybearer, so that a test match is not lost to one's own tower; it is a
+proposal, not a setting. The owner is asked before the first build that includes Sentries:
+slice 1's pull request does not merge with a value the owner has not seen. The row lands in
+slice 1's proto and rules pull request, and until the owner answers it is a `PLACEHOLDER` naming
+the owner: the row's entry in `rules/README.md`'s table, and the sim constant or reader that names
+the row, carry the marker
 `PLACEHOLDER: whether a raw Sentry fires on its own seat's Keybearer (item 229, point 70) — owner, at the three towers' close`.
 A raw Sentry fires on its own seat's drones and units whatever the value.
 
@@ -220,7 +261,7 @@ A raw Sentry fires on its own seat's drones and units whatever the value.
 
 | Step | Snapshot and save | Verifier report goldens | Chains | Contract formats |
 |---|---|---|---|---|
-| 1, defeat | if the death counter leaves the snapshot | those with an `on_death` block | every chain where a commander dies | `gp.v1` (`on_death`), the event vocabulary |
+| 1, defeat | yes (the death count and respawn tick leave) | those with an `on_death` block | every committed chain (the seat row's death count and respawn tick leave the hash) | `gp.v1` (`on_death`, `cmdr_deaths`), the event vocabulary |
 | 2, slice 1 | yes (installed rotes) | every one | where a Sentry stands; with Easy's Sentries, built-in scenarios and the nightly | `gp.v1`, `gp.api.v1`, the rules table, the event vocabulary |
 | 3, slice 2 | yes (pressed records, the entered mark, the setting) | every one | every committed match | the setting in `match.json`, the config line and the save; the event vocabulary |
 | 4, slice 3 | yes (cables) | every one | where cable is laid or a Stake commissioned | `gp.v1` (the cable target), the material table, the event vocabulary |
@@ -236,11 +277,20 @@ slice's lane's to decide and to state, since it decides which chains move.
 
 ## 6. What the owner is asked, and when
 
-Nothing in this plan needs the owner before step 0. The owner is asked: the tag `v0.4.0-m1`, at
-step 5; the verdict on writing a tower's program, at the close; and the questions `holdfast.md`
-section 20 holds, each when the step that needs it arrives (point 70's value before slice 1
-merges only if the owner wants to change it). A slice that finds a question outside the design
-holds that piece and batches it (CLAUDE.md, "What is asked and what is told").
+Nothing in this plan needs the owner before step 0. The owner is asked: point 70's value, before
+slice 1's pull request merges (section 3); the tag `v0.4.0-m1`, at step 5; the verdict on writing
+a tower's program, at the close; and the questions `holdfast.md` section 20 holds, each when the
+step that needs it arrives. A slice that finds a question outside the design holds that piece and
+batches it (CLAUDE.md, "What is asked and what is told").
+
+**Point 46, the form of the starter bots.** The owner's direction was: "investigate this further.
+this form is important for core game mechanics.  the final solution must be comprehensive and
+coherent and ambitious but should start with something reasonable and achievable within the next
+milestone" (item 229, point 46). It asks for a start inside the next milestone. Slice 1's rote,
+the Sentry's starter rote of cards, which the player can open and edit, is that start; this is
+the main session's design, and the owner can veto it. The full form stays held: it comes back to
+the owner as an interview before S4's second half is planned, since that half moves today's guns
+onto cards (item 229, point 51).
 
 ## 7. What the AI play harness measures before each slice closes
 
@@ -269,7 +319,7 @@ Planned when the three towers closes (item 227, point 37). It is named to hold:
 - **every gun onto cards**, the autocannon and the mortar losing free identification (item 229,
   point 51);
 - **each machine sensing for itself**, a seat's machines no longer sharing one perfect map
-  (points 51 and 62);
+  (points 51 and 62), with a real line-of-sight model for the sim's sight seam;
 - **radio with the Signal spar and the security phase**: Lapsed, tamper and Outcast, when
   emissions matter (points 61 to 63; `holdfast.md`, section 11), with the over-the-air attacks
   that move into S4 (item 227, point 37).
@@ -312,7 +362,8 @@ at the milestone review.
 4. **Buried cable has almost no counterplay** (accepted, item 229, point 65).
 5. **The arc warnings are rough**: straight-line geometry between named places.
 
-**Fallbacks.**
+**Fallbacks.** F1 to F3 are the fun gate's written fallbacks, the gate embedded in the stage's
+named depth task, the three towers (section 1).
 
 - **F1, scope.** If slice 3 is not playable when slices 1 and 2 are, the three towers may close on
   slices 1 and 2, with cable and Mark moved to the head of S4's second half. The owner decides at
@@ -327,5 +378,8 @@ at the milestone review.
 ## 10. Deliberately left out of the first half
 
 Rotes for units and for today's guns; commander styles, the roster, Sworn and Bound (S5); surety;
-radio, the Signal spar, Lapsed, tamper, Outcast and forged marks; line of sight beyond a
-challenge's; the code view (S6). Everything in AGENTS.md section 11 stays out.
+radio, the Signal spar, Lapsed, tamper, Outcast and forged marks; a line-of-sight model (a
+challenge reaches what the Sentry's sensor sees through the sim's existing sight seam, which is
+radius-only today, decisions-log item 144 (4); real line of sight is later work for that seam,
+with S4's second half, when each machine senses for itself); the code view (S6). Everything in
+AGENTS.md section 11 stays out.

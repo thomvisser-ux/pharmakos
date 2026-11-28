@@ -63,10 +63,11 @@ earlier contents carried as inputs; the fun gate moves to after the first new-co
 (decisions-log item 227). Versions are stage-based before 1.0, the minor number the stage: S3's
 build is v0.3.0, the three towers' v0.4.0-m1 and S4's close v0.4.0, and the public preview is
 whichever version passes the fun gate, the public v0.1 being retired (item 228). From S4 a
-unit's or a structure's program is a rote of rule cards the player can author, which are data like
-playbooks; the first build is towers only (item 227, the owner's points 20, 28 and 36). Trust in
-a beacon's machines is its holdfast, earned by the commander's hand, and beacons pass marks by
-buried cable before radio arrives in S4's second half (item 229; `holdfast.md`, `s4-plan.md`).
+unit's or a structure's program is a rote of rule cards the player can author (the rote form is
+the main session's design; the owner can veto), which are data like playbooks; the first build
+is towers only (item 227, the owner's points 20, 28 and 36). Trust in a beacon's machines is its
+holdfast, earned by the commander's hand, and beacons pass marks by buried cable before radio
+arrives in S4's second half (item 229; `holdfast.md`, `s4-plan.md`).
 
 Implementation rules — determinism, crate boundaries, contract files, security, commits, CI, the
 definition of done — are in [`../../AGENTS.md`](../../AGENTS.md), not here. Contribution mechanics
