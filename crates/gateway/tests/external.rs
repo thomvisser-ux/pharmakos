@@ -20,7 +20,9 @@
 
 mod support;
 
-use pharmakos_gateway::limit::{EXTERNAL_LIMITS, EXTERNAL_REFUSALS_IN_A_ROW};
+use pharmakos_gateway::limit::{
+    EXTERNAL_LIMITS, EXTERNAL_REFUSALS_IN_A_PROCESS, EXTERNAL_REFUSALS_IN_A_ROW,
+};
 use pharmakos_gateway::probation::Preset;
 use pharmakos_gateway::rpc;
 use pharmakos_gateway::serve::{Config, ConfigLine, External, NoOperators, Setup};
@@ -430,6 +432,86 @@ fn the_door_closes_after_refusals_in_a_row_and_the_log_stops_growing() {
             .is_some()
     );
     next.close().expect("put down again");
+}
+
+/// The count in a row starts again at every admitted call, so a program that
+/// makes one good call among its bad lines never reaches it. The count in all
+/// does not start again: the door closes on it, and the lines one process's
+/// refusals leave are bounded by a number (review 4, finding 2).
+#[test]
+fn refusals_among_admitted_calls_close_the_door_at_the_cap_in_all() {
+    let root = data_root("external-door-in-all");
+    let id = "m-external-door-in-all";
+    let mut external = open(&root, id, false);
+    let block = EXTERNAL_REFUSALS_IN_A_ROW.saturating_sub(1);
+    let mut refused = 0_u32;
+    while !external.door_closed() {
+        assert!(
+            refused < EXTERNAL_REFUSALS_IN_A_PROCESS,
+            "the door is open after {refused} refusals"
+        );
+        for _ in 0..block {
+            if external.door_closed() {
+                break;
+            }
+            external.call("not json");
+            refused = refused.saturating_add(1);
+        }
+        if !external.door_closed() {
+            assert!(
+                ask(&mut external, "get_status", no_params())
+                    .get("result")
+                    .is_some()
+            );
+        }
+    }
+    assert_eq!(refused, EXTERNAL_REFUSALS_IN_A_PROCESS);
+    external.close().expect("the match is put down");
+    let log = audit_log(&root, id);
+    assert_eq!(
+        u32::try_from(log.matches("call <malformed>").count()).expect("a small count"),
+        EXTERNAL_REFUSALS_IN_A_PROCESS
+    );
+    assert_eq!(log.matches("external seat door closed").count(), 1, "{log}");
+}
+
+/// The match's end is on disk only once the host is put down as ended: put
+/// back, the match is taken up again, the last Push is played again to the
+/// same end, and only a close writes the `ended` save no resume takes up
+/// (review 4, finding 3).
+#[test]
+fn an_ended_match_put_back_is_played_to_the_same_end_again() {
+    let root = data_root("external-put-back");
+    let id = "m-external-put-back";
+    let mut external = open(&root, id, false);
+    for _ in 0..2 {
+        ask(&mut external, "set_ready", no_params());
+        external.advance().expect("the round plays");
+    }
+    assert!(external.ended());
+    let recap = result(&ask(&mut external, "get_recap", no_params()), "get_recap");
+    external.put_back().expect("the match is put back");
+
+    // Taken up again: the last Push is replayed, to the same end and recap.
+    let mut again = open(&root, id, true);
+    assert!(again.ended());
+    assert_eq!(
+        result(&ask(&mut again, "get_recap", no_params()), "get_recap").get("prose"),
+        recap.get("prose")
+    );
+    again.close().expect("the match is put down, ended");
+
+    // And now it has ended on disk.
+    let refused = External::open(
+        setup(),
+        &root,
+        &ConfigLine {
+            config: config(id),
+            resume: true,
+        },
+    )
+    .expect_err("an ended match is not taken up");
+    assert_eq!(refused, pharmakos_gateway::save::match_ended());
 }
 
 /// A call past the budget is a refusal the door counts, so a bridge that has

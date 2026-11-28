@@ -824,7 +824,7 @@ fn a_recap_file_does_not_end_a_match_and_is_not_read_while_it_lives() {
         let gone = gamectl(&command);
         assert_eq!(gone.code, Exit::Failed, "{command:?}");
         assert!(
-            gone.err.contains("was not kept"),
+            gone.err.contains("has been removed since"),
             "{command:?}: {}",
             gone.err
         );
@@ -915,6 +915,84 @@ fn a_new_match_whose_first_save_fails_leaves_a_folder_to_start_again() {
     assert_eq!(new.code, Exit::Ok, "{}", new.err);
     let status = gamectl(&["match", "call", "get_status", "--dir", &at]);
     assert_eq!(status.code, Exit::Ok, "{}", status.err);
+}
+
+/// A `match new` refused over a save an earlier match left takes its own line
+/// away again: kept, the line named a match the save is not, every command
+/// was refused for it, and `new` called the folder a match (review 4,
+/// finding 1).
+#[test]
+fn a_new_match_refused_over_an_earlier_save_leaves_no_line() {
+    let dir = fresh_dir("refused-new");
+    let at = dir_arg(&dir);
+    let new = gamectl(&["match", "new", "--dir", &at, "--seed", "1"]);
+    assert_eq!(new.code, Exit::Ok, "{}", new.err);
+    std::fs::remove_file(dir.join(LINE_FILE)).expect("the line is removed by hand");
+
+    let again = gamectl(&["match", "new", "--dir", &at, "--seed", "5"]);
+    assert_eq!(again.code, Exit::Input, "{}{}", again.out, again.err);
+    assert!(again.out.is_empty(), "{}", again.out);
+    assert!(
+        !dir.join(LINE_FILE).exists(),
+        "the line of a match that was not started"
+    );
+    assert!(!dir.join(external::LOCK_FILE).exists());
+    // The folder is as it was: no match these commands take up, said so.
+    let missing = gamectl(&["match", "call", "get_status", "--dir", &at]);
+    assert_eq!(missing.code, Exit::Input);
+    assert!(missing.err.contains("holds no match"), "{}", missing.err);
+}
+
+/// The recap is on disk before the match's end is: a last recap that cannot
+/// be written leaves the match as it stood before its last Push, and the next
+/// command plays that Push again and keeps the recap. Before, the `ended`
+/// save was on disk first, an ended match is never taken up again, and one
+/// failed write lost the recap for good (review 4, finding 3).
+#[test]
+fn a_recap_that_cannot_be_written_is_kept_by_the_next_command() {
+    let dir = fresh_dir("recap-unwritten");
+    let at = dir_arg(&dir);
+    let new = gamectl(&["match", "new", "--dir", &at, "--rounds", "1"]);
+    assert_eq!(new.code, Exit::Ok, "{}", new.err);
+
+    // A folder where the recap's partial file goes.
+    let blocker = dir.join("result.json.partial");
+    std::fs::create_dir_all(&blocker).expect("the blocker");
+    let ready = gamectl(&["match", "call", "set_ready", "--dir", &at]);
+    assert_eq!(ready.code, Exit::Internal, "{}", ready.err);
+    assert!(ready.err.contains("could not be written"), "{}", ready.err);
+    assert!(ready.err.contains("plays that Push again"), "{}", ready.err);
+    // The call landed and is answered; the match was put back, and its lock
+    // is gone.
+    let answer = json::read(&ready.out).expect("the answer to `set_ready` is printed");
+    assert!(answer.get("result").is_some(), "{}", ready.out);
+    assert!(!dir.join(external::LOCK_FILE).exists());
+    assert!(!dir.join(external::RESULT_FILE).exists());
+
+    // Still blocked: the next command plays the Push again and says the same.
+    let still = gamectl(&["match", "brief", "--dir", &at]);
+    assert_eq!(still.code, Exit::Internal, "{}", still.err);
+    assert!(still.err.contains("could not be written"), "{}", still.err);
+    assert!(!dir.join(external::LOCK_FILE).exists());
+
+    // The blocker goes, and the next command keeps the recap and ends the
+    // match.
+    std::fs::remove_dir(&blocker).expect("the blocker is removed");
+    let brief = gamectl(&["match", "brief", "--dir", &at]);
+    assert_eq!(brief.code, Exit::Ok, "{}", brief.err);
+    assert!(brief.out.contains("== ended =="), "{}", brief.out);
+    let kept = std::fs::read_to_string(dir.join(external::RESULT_FILE)).expect("the kept recap");
+    let recap = json::read(&kept).expect("the kept recap is JSON");
+    assert!(
+        recap
+            .get("result")
+            .and_then(|result| result.get("prose"))
+            .is_some(),
+        "{kept}"
+    );
+    let after = gamectl(&["match", "call", "get_status", "--dir", &at]);
+    assert_eq!(after.code, Exit::Failed);
+    assert!(after.err.contains("last recap is in"), "{}", after.err);
 }
 
 /// A program stuck in a loop is stopped: after the cap of refusals in a row

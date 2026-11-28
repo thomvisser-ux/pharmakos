@@ -551,9 +551,9 @@ pub fn match_ended_unkept(result: &str) -> String {
     let result = pharmakos_proto::json::grammar::escaped(result);
     format!(
         "{BINARY} match: this match has ended, and an ended match is not taken up again. The \
-         seat's last recap was not kept (`{result}` is not there): the process that played the \
-         last Push stopped before it wrote it. The match's sealed playbooks and chains are in \
-         its folder."
+         seat's last recap is not there (`{result}`): it was written before the match's end \
+         was, so it has been removed since. The match's sealed playbooks and chains are in its \
+         folder."
     )
 }
 
@@ -578,7 +578,9 @@ pub fn match_result_unwritten(path: &str, why: &str) -> String {
     let path = pharmakos_proto::json::grammar::escaped(path);
     format!(
         "{BINARY} match: the match has ended and the seat's last recap could not be written to \
-         `{path}` ({why}). The match's sealed playbooks and chains are in its folder."
+         `{path}` ({why}). The match is put back as it stood before its last Push: the next \
+         `{BINARY} match` command plays that Push again, to the same end, and keeps the recap \
+         then."
     )
 }
 
@@ -590,12 +592,12 @@ pub fn match_pipe(what: &str, error: &std::io::Error) -> String {
 
 /// `match serve` ended because the host closed its door on the program.
 #[must_use]
-pub fn match_door_closed(refusals: u32) -> String {
+pub fn match_door_closed(in_a_row: u32, in_all: u32) -> String {
     format!(
-        "{BINARY} match serve: the bridge ended: {refusals} lines in a row were refused (lines \
-         that are not requests, and calls past this process's call budget), so nothing more is \
-         read. The match was put down; a new `{BINARY} match` command, or a new bridge, goes on \
-         with its own budget."
+        "{BINARY} match serve: the bridge ended: {in_a_row} lines in a row were refused, or \
+         {in_all} in all (lines that are not requests, and calls past this process's call \
+         budget), so nothing more is read. The match was put down; a new `{BINARY} match` \
+         command, or a new bridge, goes on with its own budget."
     )
 }
 

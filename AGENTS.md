@@ -833,8 +833,9 @@ of that premise.
   152, 226, 227 and 228). **A real seat is a seat in a match that another person plays in or
   relies on, or that reads text from outside this repository. Test matches on this machine are not
   real seats** (the owner's definition, decisions-log item 229, point 47). The owner's own
-  session's agents may therefore play the external seat in test matches on this machine (the
-  owner's answer, decisions-log item 231 (6), point 71).
+  session's agents may play the external seat in test matches on this machine, in the bypass mode
+  the delegation allows them, and never a real seat (the owner's answer to its own question,
+  decisions-log item 231 (6), point 71).
 - **The external seat holds a seat's rights and nothing else** (§2; decisions-log item 231). Its
   token is minted inside the gateway and never leaves it: none is in `gamectl`, on a command line,
   on a pipe or on the disk, and no token that could move the match is minted at all. Nothing
@@ -843,7 +844,8 @@ of that premise.
   a Lull's budget **in the host's process** (`limit::EXTERNAL_LIMITS`): the bridge, `match
   serve`, is held to it, and a one-call command, a process of its own, is bounded by the cost of
   starting a process; a host that has answered `limit::EXTERNAL_REFUSALS_IN_A_ROW` refusals in a
-  row (messages that are not requests, calls past the budget) closes its door for that process,
+  row, or `limit::EXTERNAL_REFUSALS_IN_A_PROCESS` in all (messages that are not requests, calls
+  past the budget), closes its door for that process,
   so a program stuck in a loop is stopped and the log stops growing. The commands take up only
   the match they started (`m-external`, the `custom` preset), never another match a folder
   holds. **The match's folder is not secret from the program that plays it**: after every

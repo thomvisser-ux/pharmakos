@@ -739,8 +739,9 @@ fn nothing_here_attaches_to_a_seat_from_outside() {
         ("Command::new", "the same rule, by the call"),
         (
             "env::var",
-            "no command reads the environment: what a command does is on its command line, and \
-             a key in a variable is a key the game would hold (AGENTS.md section 7)",
+            "no source of this crate names the environment: what a command does is on its \
+             command line, and a key in a variable is a key the game would hold (AGENTS.md \
+             section 7); the gateway reads it for `gamectl host`, to find the lobby's folder",
         ),
     ];
     for relative in SOURCES {
@@ -818,6 +819,7 @@ fn nothing_here_writes_a_committed_golden() {
         "fs::copy",
         "fs::rename",
         "File::create",
+        "File::options",
         "OpenOptions",
     ];
     let mut writers: Vec<&str> = Vec::new();

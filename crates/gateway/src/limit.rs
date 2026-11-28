@@ -110,9 +110,12 @@ pub const IN_PROCESS_LIMITS: Limits = Limits {
 /// player's disk, so a program stuck in a loop is stopped. A refusal is a
 /// line too, and a message that was never a request never reaches this
 /// limiter, so the cap alone does not bound the log: the host closes its door
-/// after [`EXTERNAL_REFUSALS_IN_A_ROW`] refusals in a row, and what arrives
-/// after that is counted and not written. One process therefore writes at
-/// most a bounded number of lines a Lull.
+/// after [`EXTERNAL_REFUSALS_IN_A_ROW`] refusals in a row, or
+/// [`EXTERNAL_REFUSALS_IN_A_PROCESS`] in all, and what arrives after that is
+/// counted and not written. One process therefore writes at most this
+/// budget's lines a Lull for the calls it admits, and at most
+/// [`EXTERNAL_REFUSALS_IN_A_PROCESS`] lines for its refusals, with one line
+/// for the door's closing and one for the count after it.
 ///
 /// What it does not do, said plainly: **the count lives in the host's
 /// process**. A new process starts a new count, so `gamectl match call`, one
@@ -141,6 +144,19 @@ pub const EXTERNAL_LIMITS: Limits = Limits {
 ///
 /// PLACEHOLDER: an external seat's 64 refusals in a row before its door closes — owner, at hardening, with the rate limits.
 pub const EXTERNAL_REFUSALS_IN_A_ROW: u32 = 64;
+
+/// How many refusals in all, of the kinds [`EXTERNAL_REFUSALS_IN_A_ROW`]
+/// counts, the external seat's host answers in one process before it closes
+/// its door.
+///
+/// The count in a row starts again at every admitted call, so by itself it
+/// would let a program that makes one good call among every sixty-three bad
+/// lines write a line for each for as long as it runs (review 4, finding 2).
+/// This count never starts again: it is the bound on the audit lines one
+/// process's refusals leave.
+///
+/// PLACEHOLDER: an external seat's 1 024 refusals a process before its door closes — owner, at hardening, with the rate limits.
+pub const EXTERNAL_REFUSALS_IN_A_PROCESS: u32 = 1_024;
 
 /// The two caps, so a test or a host can set them without touching the
 /// constants.

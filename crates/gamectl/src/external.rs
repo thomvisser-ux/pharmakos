@@ -99,9 +99,10 @@
 //! spent it is refused every call for the rest of that Lull, `set_ready`
 //! included; the next process has its own. After
 //! `pharmakos_gateway::limit::EXTERNAL_REFUSALS_IN_A_ROW` refusals in a row
-//! (lines that are not requests, and calls past the budget) the host closes
-//! its door and `serve` ends, exit 3, with the match put down: a program
-//! stuck in a loop is stopped, and the audit log stops growing.
+//! (lines that are not requests, and calls past the budget), or
+//! `pharmakos_gateway::limit::EXTERNAL_REFUSALS_IN_A_PROCESS` in all, the
+//! host closes its door and `serve` ends, exit 3, with the match put down: a
+//! program stuck in a loop is stopped, and the audit log stops growing.
 //!
 //! # The match's end
 //!
@@ -115,10 +116,17 @@
 //! file, under a heading that says it is the kept file and not the gateway's
 //! answer now, and every other command is answered that the match has ended
 //! (exit 3). A file of that name in the folder of a match that has not ended
-//! is not read at all. Said plainly: a process that dies after the last Push
-//! is on disk and before that file is, leaves an ended match with no recap
-//! file, which the commands say; the match's sealed playbooks and chains are
-//! still in the folder.
+//! is not read at all.
+//!
+//! **The recap is on disk before the match's end is.** The gateway's external
+//! host holds the `ended` save back until the match is put down
+//! (`External::close`), and this module puts an ended match down only once
+//! the file is written. A process that dies after the last Push, or cannot
+//! write the file (it says so, exit 4, and puts the match back as it stood
+//! before that Push), leaves a match that has not ended on disk: the next
+//! command plays the last Push again, to the same end (the sim is a function
+//! of its inputs), and keeps the recap then. So an ended match has its recap
+//! file, unless someone has removed it since.
 //!
 //! # Game text is data
 //!
@@ -217,11 +225,13 @@ pub fn run(root: &Path, dir: &Path, verb: &MatchVerb) -> Result<String, Failure>
             let mut session = Session::start(root, dir, &line)?;
             let answer = session.ask("get_status", empty_params());
             // A match whose first save could not be written is no match: its
-            // line goes with it, so the folder can be started again.
-            session
-                .put_down()
-                .map_err(|failure| unstarted(dir, failure))?;
-            answered(&answer)
+            // line goes with it, so the folder can be started again, and it
+            // is not announced. One whose save landed is a match, and is.
+            match session.put_down() {
+                Ok(()) => answered(&answer),
+                Err(failure) if saved(dir) => beside(answered(&answer), Err(failure)),
+                Err(failure) => Err(line_removed(dir, failure)),
+            }
         }
         MatchVerb::Call { method, params } => {
             let params = match params {
@@ -232,7 +242,7 @@ pub fn run(root: &Path, dir: &Path, verb: &MatchVerb) -> Result<String, Failure>
             let answer = session.ask(method, params);
             let down = match session.advance() {
                 Ok(()) => session.put_down(),
-                Err(failure) => Err(failure),
+                Err(failure) => Err(session.give_up(failure)),
             };
             beside(answered(&answer), down)
         }
@@ -366,11 +376,15 @@ pub fn serve<R: BufRead, W: Write>(
         if session.external.door_closed() {
             break Err(Failure::failed(strings::match_door_closed(
                 pharmakos_gateway::limit::EXTERNAL_REFUSALS_IN_A_ROW,
+                pharmakos_gateway::limit::EXTERNAL_REFUSALS_IN_A_PROCESS,
             )));
         }
         // A host that stopped has said why and is not put down again: its
-        // lock goes as the session is dropped.
-        session.advance()?;
+        // lock goes as the session is dropped. A match whose recap could not
+        // be kept is put back.
+        if let Err(failure) = session.advance() {
+            return Err(session.give_up(failure));
+        }
     };
     match (ended, session.put_down()) {
         (Ok(()), Ok(())) => Ok(String::new()),
@@ -493,6 +507,9 @@ struct Session {
     /// The seat's last recap is on disk: this process ended the match and
     /// wrote it.
     kept: bool,
+    /// This process ended the match and could not keep the recap: the match
+    /// is put back as not ended ([`Session::give_up`]).
+    unkept: bool,
 }
 
 impl Session {
@@ -541,10 +558,12 @@ impl Session {
                 _held: held,
                 next_id: 1,
                 kept: false,
+                unkept: false,
             }),
-            // No match was started: the line goes, so the folder is not read
-            // as one.
-            Err(failure) => Err(unstarted(dir, failure)),
+            // No match was started: the line this call wrote goes, whatever
+            // else the folder holds (a save here is an earlier match's, which
+            // this line does not name), so the folder is not read as one.
+            Err(failure) => Err(line_removed(dir, failure)),
         }
     }
 
@@ -570,9 +589,12 @@ impl Session {
                     _held: held,
                     next_id: 1,
                     kept: false,
+                    unkept: false,
                 };
                 if session.external.ended() {
-                    session.keep_recap()?;
+                    if let Err(failure) = session.keep_recap() {
+                        return Err(session.give_up(failure));
+                    }
                     session.put_down()?;
                     return Ok(None);
                 }
@@ -614,8 +636,17 @@ impl Session {
 
     /// Ask the seat's last `get_recap` and write it to [`RESULT_FILE`], whole
     /// or not at all, over whatever file of that name is there: this process
-    /// holds the ended match, and what it is told now is the recap.
+    /// holds the ended match, and what it is told now is the recap. A recap
+    /// that could not be kept marks the session, which is then put back and
+    /// not put down ([`Session::give_up`]).
     fn keep_recap(&mut self) -> Result<(), Failure> {
+        let kept = self.try_keep_recap();
+        self.kept = kept.is_ok();
+        self.unkept = kept.is_err();
+        kept
+    }
+
+    fn try_keep_recap(&mut self) -> Result<(), Failure> {
         let path = self.dir.join(RESULT_FILE);
         let unwritten = |why: &str| {
             Failure::internal(strings::match_result_unwritten(&crate::display(&path), why))
@@ -630,9 +661,44 @@ impl Session {
         }
         let partial = self.dir.join(RESULT_PARTIAL);
         write_whole(&partial, &path, json::write(&recap).as_bytes())
-            .map_err(|error| unwritten(&error.to_string()))?;
-        self.kept = true;
-        Ok(())
+            .map_err(|error| unwritten(&error.to_string()))
+    }
+
+    /// End this session on `failure`, which [`Session::advance`] or
+    /// [`Session::keep_recap`] gave.
+    ///
+    /// A host that stopped has said why, and what the disk holds is what the
+    /// next command reads: the session is dropped, and its lock with it. A
+    /// match that ended here and whose recap could not be kept is **put
+    /// back**: the `ended` save is not written, so the next command plays the
+    /// last Push again and keeps the recap then (the module docs, "The recap
+    /// is on disk before the match's end is"). What putting it back met is
+    /// said beside the failure, never in its place.
+    fn give_up(self, failure: Failure) -> Failure {
+        if !self.unkept {
+            return failure;
+        }
+        let Session {
+            external,
+            unsaid,
+            _held: held,
+            ..
+        } = self;
+        let back = external
+            .put_back()
+            .map_err(|error| stopped(&error, &unsaid));
+        drop(held);
+        match back {
+            Ok(()) => {
+                host::say_unsaid_at_close(&mut std::io::stderr(), &unsaid);
+                failure
+            }
+            Err(down) => Failure {
+                code: failure.code,
+                message: strings::match_and(&failure.message, &down.message),
+                output: failure.output,
+            },
+        }
     }
 
     /// Put the match down, and say what Easy's seats could not.
@@ -662,15 +728,16 @@ fn write_whole(partial: &Path, path: &Path, bytes: &[u8]) -> std::io::Result<()>
     std::fs::rename(partial, path)
 }
 
+/// Whether `dir` holds a save of these commands' match: after a `match new`
+/// that opened its match, the save is that match's own.
+fn saved(dir: &Path) -> bool {
+    pharmakos_gateway::cache::MatchCache::reopen(dir, MATCH_ID).is_ok()
+}
+
 /// `failure`, for a `match new` that started no match: the line it wrote
 /// goes, so the folder is not read as a match and can be started again. A
-/// folder whose match does have a save keeps its line: that match can be
-/// taken up. A line that will not go is said with the failure, never left
-/// unsaid.
-fn unstarted(dir: &Path, failure: Failure) -> Failure {
-    if pharmakos_gateway::cache::MatchCache::reopen(dir, MATCH_ID).is_ok() {
-        return failure;
-    }
+/// line that will not go is said with the failure, never left unsaid.
+fn line_removed(dir: &Path, failure: Failure) -> Failure {
     let path = dir.join(LINE_FILE);
     match std::fs::remove_file(&path) {
         Ok(()) => failure,

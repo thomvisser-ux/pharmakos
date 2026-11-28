@@ -86,6 +86,10 @@ that says so, and every other command says the match has ended. Whether a match 
 gateway's word, never the file's: a `result.json` in the folder of a match that is still being
 played is not read.
 
+The recap is written before the match's end is. A command that is killed after the last Push, or
+cannot write `result.json` (exit code 4), leaves the match as it stood before that Push: the next
+command plays it again, to the same end, and writes the recap then.
+
 ## The bridge
 
 ```sh
@@ -105,14 +109,16 @@ A process may make 1 200 calls in one Lull; a call past that is answered `RATE_L
 count is the process's, so:
 
 - the bridge is held to it. A bridge that has spent the budget is refused every call for the rest
-  of that Lull, `set_ready` included; end it and start another, or say ready with
-  `gamectl match call set_ready`;
+  of that Lull, `set_ready` included; end it, and then start another or say ready with
+  `gamectl match call set_ready` (a command run while the bridge still holds the folder is
+  refused, exit code 2);
 - the one-call commands are each a process of their own, so the number does not bind them. They
   are bounded by the cost of starting a process.
 
-After 64 refusals in a row (lines that are not requests, and calls past the budget) the host
-stops reading: the bridge ends with exit code 3, the match is put down, and the next command or
-bridge goes on. A program stuck in a loop is stopped that way, and the audit log stops growing.
+After 64 refusals in a row, or 1 024 in all (lines that are not requests, and calls past the
+budget), the host stops reading: the bridge ends with exit code 3, the match is put down, and the
+next command or bridge goes on. A program stuck in a loop is stopped that way, and one process's
+refusals add at most 1 024 lines to the audit log.
 
 Every command also plans the built-in seats again as it takes the Lull up (they arrive at the same
 playbooks), which adds their calls to the audit log beside the command's own.
@@ -130,8 +136,10 @@ playbooks), which adds their calls to the audit log beside the command's own.
   read or is too long; the gateway would not open the match because of what it was given.
 - **1**: the command line was wrong.
 - **4**: the host stopped on a write it could not make, or the gateway could not open the match
-  for a reason that is not the caller's. A call that was answered before the host stopped still
-  prints its answer on standard output.
+  for a reason that is not the caller's; the seat's last recap could not be written or was
+  refused (the match is put back, and the next command plays its last Push again); or the
+  bridge's own standard input or output failed. A call that was answered before any of these
+  still prints its answer on standard output.
 
 A harness that runs one command at a time never meets a held folder; one that does has a command
 still running, or one that was killed.

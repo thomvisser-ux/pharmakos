@@ -64,6 +64,9 @@ contract-file rule depends on approval prompts actually happening; bypass mode r
 mechanism rather than speeding it up. The owner's definition (AGENTS.md §7; decisions-log item
 229, point 47): "A real seat is a seat in a match that another person plays in or relies on, or
 that reads text from outside this repository. Test matches on this machine are not real seats."
+The owner's answer to point 71 (decisions-log item 231 (6)): this session's agents may play the
+external seat in test matches on this machine, in the bypass mode the delegation below allows
+them, and never a real seat.
 
 **Owner's delegation for the walking skeleton, S1, S2, S3 and S4 (decisions-log
 §2.7 items 85, 86, 116 (2) and (9), and 120, from 2026-09-14; renewed for S1 by item 126 (2) (g),

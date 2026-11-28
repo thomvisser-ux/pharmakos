@@ -162,8 +162,16 @@
 //!   has a new count. What the limiter does not bound (a message that was
 //!   never a request, and the refusals past the budget, each a line in the
 //!   audit log) the host bounds itself: after
-//!   [`crate::limit::EXTERNAL_REFUSALS_IN_A_ROW`] of them in a row its door
+//!   [`crate::limit::EXTERNAL_REFUSALS_IN_A_ROW`] of them in a row, or
+//!   [`crate::limit::EXTERNAL_REFUSALS_IN_A_PROCESS`] in all, its door
 //!   closes for the process ([`External::door_closed`]).
+//! * **The match's end is on disk after the seat's last recap is.** A socket
+//!   host writes the `ended` save with the final chain. This host holds it
+//!   back until [`External::close`], so its caller can keep the recap first
+//!   (`gamectl match` writes it to a file): until then the final round's
+//!   `sealed` save stands, and a process that dies, or cannot keep the
+//!   recap and says so ([`External::put_back`]), leaves a match the next
+//!   process replays to the same end and the same recap.
 //! * **A Lull lasts until the seat says it may end.** No clock is read or
 //!   reported, so nothing here depends on how fast the machine or the program
 //!   is, and the Lull's length is not an input to anything hashed. The Push
@@ -191,7 +199,7 @@
 
 use pharmakos_proto::json::grammar::Said;
 use pharmakos_proto::said;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -980,6 +988,8 @@ pub fn run_in<C: Read + Send + 'static, A: Write>(
         rules_hash,
         largest,
         drops: Some(Arc::clone(&drops)),
+        hold_end: false,
+        held_end: RefCell::new(None),
         drops_recorded: Cell::new(false),
         audit_broken: Cell::new(false),
     };
@@ -1626,8 +1636,11 @@ pub struct External {
     /// Refusals answered in a row, of the kinds a program stuck in a loop
     /// makes ([`crate::limit::EXTERNAL_REFUSALS_IN_A_ROW`]).
     refused_in_a_row: u32,
-    /// The door closed on that count: no later message of this process is
-    /// read, and none leaves a line of its own.
+    /// Such refusals answered by this process in all
+    /// ([`crate::limit::EXTERNAL_REFUSALS_IN_A_PROCESS`]).
+    refused: u32,
+    /// The door closed on one of those counts: no later message of this
+    /// process is read past its id, and none leaves a line of its own.
     door_closed: bool,
     /// Messages that arrived after the door closed: counted here, and said
     /// in one audit line as the host puts the match down.
@@ -1716,6 +1729,8 @@ impl External {
                 rules_hash,
                 largest,
                 drops: None,
+                hold_end: true,
+                held_end: RefCell::new(None),
                 drops_recorded: Cell::new(false),
                 audit_broken: Cell::new(false),
             },
@@ -1725,6 +1740,7 @@ impl External {
             seat,
             stopped: None,
             refused_in_a_row: 0,
+            refused: 0,
             door_closed: false,
             unanswered: 0,
         };
@@ -1763,17 +1779,21 @@ impl External {
     /// never a request does not reach the rate limiter, and a call the limiter
     /// refuses still leaves its line, so neither is bounded by the call
     /// budget. After [`crate::limit::EXTERNAL_REFUSALS_IN_A_ROW`] such
-    /// refusals in a row the door closes for the rest of this process
+    /// refusals in a row, or [`crate::limit::EXTERNAL_REFUSALS_IN_A_PROCESS`]
+    /// in all, the door closes for the rest of this process
     /// ([`External::door_closed`]): the closing is one audit line, every
-    /// later message is answered `RATE_LIMITED` in words that say so, unread
-    /// and with no line of its own, and their count is one line as the match
-    /// is put down. A headless Lull's tick stands still, so a spent budget
+    /// later message is answered `RATE_LIMITED` in words that say so, read
+    /// for its id only and with no line of its own, and their count is one
+    /// line as the match is put down. A headless Lull's tick stands still, so a spent budget
     /// stays spent for the process; the next process has its own.
     pub fn call_bytes(&mut self, bytes: &[u8]) -> Json {
         if let Some(error) = &self.stopped {
             return rpc::failure(&id_of(bytes), error);
         }
         if self.door_closed {
+            // A count, said in one line: it cannot pass a `u64` in any
+            // process that ends, and one that did would be said as the
+            // largest, which is still "more than anyone read".
             self.unanswered = self.unanswered.saturating_add(1);
             return rpc::failure(&id_of(bytes), &door_closed_error());
         }
@@ -1817,8 +1837,13 @@ impl External {
         if admitted {
             self.refused_in_a_row = 0;
         } else {
+            // Both counts stop at their caps, where the door closes and
+            // nothing more is counted.
             self.refused_in_a_row = self.refused_in_a_row.saturating_add(1);
-            if self.refused_in_a_row >= crate::limit::EXTERNAL_REFUSALS_IN_A_ROW {
+            self.refused = self.refused.saturating_add(1);
+            if self.refused_in_a_row >= crate::limit::EXTERNAL_REFUSALS_IN_A_ROW
+                || self.refused >= crate::limit::EXTERNAL_REFUSALS_IN_A_PROCESS
+            {
                 self.door_closed = true;
                 let tick = self.surface.time().tick;
                 self.surface.audit().refused(
@@ -1950,7 +1975,9 @@ impl External {
     }
 
     /// Put the match down: write what is pending and, in a Lull, the `lull`
-    /// save a resume lands in.
+    /// save a resume lands in; at the match's end, the `ended` save this
+    /// host held back (the module docs, "The match's end is on disk after
+    /// the seat's last recap is").
     ///
     /// # Errors
     ///
@@ -1961,10 +1988,31 @@ impl External {
             return Err(error);
         }
         self.say_unanswered();
-        match self.writer.close(&mut self.surface) {
+        let closed = self
+            .writer
+            .write_held_end(&mut self.surface)
+            .and_then(|()| self.writer.close(&mut self.surface));
+        match closed {
             Ok(()) => Ok(()),
             Err(error) => Err(self.writer.last_lines(&mut self.surface, error)),
         }
+    }
+
+    /// Put an ended match back **as not ended**: write what is pending but
+    /// not the `ended` save this host holds, so the final round's `sealed`
+    /// save stands and the next process replays the last Push to the same
+    /// end.
+    ///
+    /// For a caller that could not keep the seat's last recap: an ended match
+    /// is never taken up again, so the end goes to disk only after the recap
+    /// has. In a match that has not ended this is [`External::close`].
+    ///
+    /// # Errors
+    ///
+    /// As [`External::close`]'s.
+    pub fn put_back(self) -> Result<(), Error> {
+        drop(self.writer.held_end.take());
+        self.close()
     }
 
     /// Whether the match has ended: there is then no Lull to act in, and
@@ -1998,10 +2046,11 @@ fn is_rate_limited(response: &Json) -> bool {
 /// What a closed door answers ([`External::door_closed`]).
 fn door_closed_error() -> Error {
     Error::rate_limited(said!(
-        "the outside seat's door is closed for this process after {} refusals in a row (messages \
-         that are not requests, and calls past the call budget); put the match down and take it \
-         up again",
-        crate::limit::EXTERNAL_REFUSALS_IN_A_ROW
+        "the outside seat's door is closed for this process after {} refusals in a row, or {} in \
+         all (messages that are not requests, and calls past the call budget); put the match \
+         down and take it up again",
+        crate::limit::EXTERNAL_REFUSALS_IN_A_ROW,
+        crate::limit::EXTERNAL_REFUSALS_IN_A_PROCESS
     ))
 }
 
@@ -2164,6 +2213,12 @@ struct Writer {
     /// with no socket ([`External`]), which has no connection to drop and
     /// writes no such line.
     drops: Option<Arc<Drops>>,
+    /// Whether an `ended` save is held back from [`Writer::flush`] until
+    /// [`Writer::write_held_end`]: the external host's, whose caller keeps
+    /// the seat's last recap before the match's end is on disk.
+    hold_end: bool,
+    /// The `ended` save held back.
+    held_end: RefCell<Option<crate::save::SavedMatch>>,
     /// Whether the drop counts have been recorded: once, whichever of the
     /// close and the stop comes first (review 3: probe C's log held them
     /// twice).
@@ -2286,22 +2341,53 @@ impl Writer {
         if let Some(state) = pending.save
             && failures.is_empty()
         {
-            let (boundary, round) = (state.boundary, state.round);
-            if let Err(error) = self.write_save(state) {
-                surface
-                    .audit()
-                    .refused(tick, None, None, "write save", &error);
-                failures.push(Failure {
-                    what: said!(
-                        "the `{}` save of round {} could not be written",
-                        boundary.name(),
-                        round
-                    ),
-                    cause: Some(error.said()),
-                });
-                self.append(surface, &mut failures);
+            if self.hold_end && state.boundary == crate::save::Boundary::Ended {
+                self.held_end.replace(Some(state));
+            } else {
+                self.save(surface, state, &mut failures);
             }
         }
+        self.failed(failures)
+    }
+
+    /// Write `state` as the match's save; a failure is audited, added to
+    /// `failures` and its line appended.
+    fn save(
+        &self,
+        surface: &mut Surface,
+        state: crate::save::SavedMatch,
+        failures: &mut Vec<Failure>,
+    ) {
+        let tick = surface.time().tick;
+        let (boundary, round) = (state.boundary, state.round);
+        if let Err(error) = self.write_save(state) {
+            surface
+                .audit()
+                .refused(tick, None, None, "write save", &error);
+            failures.push(Failure {
+                what: said!(
+                    "the `{}` save of round {} could not be written",
+                    boundary.name(),
+                    round
+                ),
+                cause: Some(error.said()),
+            });
+            self.append(surface, failures);
+        }
+    }
+
+    /// Write the `ended` save [`Writer::flush`] held back, when it holds one.
+    ///
+    /// # Errors
+    ///
+    /// As [`Writer::flush`]'s for a save that could not be written: the final
+    /// round's `sealed` save then stands.
+    fn write_held_end(&self, surface: &mut Surface) -> Result<(), Error> {
+        let Some(state) = self.held_end.take() else {
+            return Ok(());
+        };
+        let mut failures: Vec<Failure> = Vec::new();
+        self.save(surface, state, &mut failures);
         self.failed(failures)
     }
 
@@ -2755,6 +2841,8 @@ mod tests {
             config,
             rules_hash: 0,
             drops: Some(Arc::new(Drops::default())),
+            hold_end: false,
+            held_end: std::cell::RefCell::new(None),
             drops_recorded: std::cell::Cell::new(false),
             audit_broken: std::cell::Cell::new(false),
         };
