@@ -9,8 +9,15 @@ Each release's notes name its tag and commit, and are the section below headed w
 string the zips carry at that commit (`xtask/src/package.rs`'s `VERSION`;
 `.github/workflows/release.yml`). Versions are stage-based before 1.0, the minor number the stage
 (decisions-log item 228): `0.N.0` closes stage N, `0.N.P` is a fix to it, `0.N.0-mK` is a
-milestone build inside stage N, and `1.0.0` is v1. The development tags `v0.1.0-dev.<n>` share the
+milestone build inside stage N, `1.0.0` is v1, and between tags `main` carries the stage being
+built with `-dev`. The development tags `v0.1.0-dev.<n>` share the
 `0.1.0-dev+skeleton` section.
+
+## 0.4.0-dev
+
+S4, Signals, in progress: builds from `main` between the `v0.3.0` tag and S4's first
+milestone tag. Nothing a player sees has changed since 0.3.0 yet; this section collects what
+lands, and the milestone's own pull request renames it to that tag's version.
 
 ## 0.3.0
 

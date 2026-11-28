@@ -77,7 +77,7 @@ use crate::{
 /// below holds. A new version is this line, that section and the preset's two
 /// settings in one commit (AGENTS.md section 9, "Versions and tags").
 /// `[workspace.package] version` stays `0.0.0` (item 117 (2); item 228).
-pub(crate) const VERSION: &str = "0.3.0";
+pub(crate) const VERSION: &str = "0.4.0-dev";
 
 /// The folder the zip holds, and the zip's only top-level entry.
 const FOLDER: &str = "Pharmakos";
