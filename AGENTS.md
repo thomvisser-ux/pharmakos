@@ -1066,9 +1066,9 @@ merge train's local check.
 `CLAUDE.md`, `.claude/**` and top-level `*.md` runs the DCO walk and the `reuse` step in place of the
 suite; either can still fail it. A file a test reads is never prose, wherever it lies
 (decisions-log item 230): `CHANGELOG.md` (the version test), `docs/design/s3-plan.md` (the bench's
-certifying test) and every `.jsonc` playbook (the reader corpus walks `docs/demo`). A test that
-starts to read a file on the allow-list adds it to `READ_BY_THE_SUITE` in `xtask/src/scope.rs` in
-the same pull request. Every other required job skips its remaining steps and reports
+certifying test) and the `.jsonc` and `.json` files under `docs/demo` (the reader corpus walks
+that folder). A test that starts to read a file on the allow-list adds it to the lists in
+`xtask/src/scope.rs` (`READ_BY_THE_SUITE`, `CORPUS_UNDER_PROSE`) in the same pull request. Every other required job skips its remaining steps and reports
 success; each job that builds, and the cross-OS guard, says so in a `::notice::`. Each building
 job's scope step decides (each shard, not the leg's `cargo xtask ci (<os>)` job, which takes prose
 only when every one of its shards' reports says so): it answers `full` in bash,

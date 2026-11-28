@@ -72,7 +72,7 @@
 # root Cargo.toml and .cargo/ for the release profiles the package builds with. It also
 # falls back when GitHub reports the PR as BEHIND (the ruleset requiring up-to-date
 # branches). A base that moved only by prose (docs/, .claude/, AGENTS.md, CLAUDE.md, a
-# top-level *.md, less the files a test reads and every playbook: NOT_PROSE below) needs no check.
+# top-level *.md, less the files a test reads: NOT_PROSE below) needs no check.
 #
 # The train runs only while each lane it names is idle: no lane session, fix pass or
 # Auto-fix fix is working in that lane's worktree or pushing its branch (the main session's
@@ -233,10 +233,11 @@ wait_for_head() {
 paths_between() { git diff --no-renames --name-only -z "$1" "$2" | tr '\0' '\n'; }
 
 # Prose: nothing the suite reads (decisions-log item 115 (4)'s allow-list), less NOT_PROSE:
-# the files a test reads and every playbook (item 230; xtask/src/scope.rs holds this line to its
-# own list). Case is folded, as two of the three operating systems fold it.
+# the files a test reads, and the playbooks a corpus walks for under docs/demo (item 230; a test in
+# xtask/src/scope.rs holds this line, character for character, to its
+# own lists). Case is folded, as two of the three operating systems fold it.
 PROSE='^(docs/|\.claude/|AGENTS\.md$|CLAUDE\.md$|[^/]+\.md$)'
-NOT_PROSE='^(CHANGELOG\.md|docs/design/s3-plan\.md|.*\.jsonc)$'
+NOT_PROSE='^(CHANGELOG\.md|docs/design/s3-plan\.md|docs/demo/.*\.jsonc|docs/demo/.*\.json)$'
 # True when a path list (one per line) names anything but prose; an empty list names nothing.
 has_non_prose() { [ -n "$1" ] && { grep -qvE "$PROSE" <<<"$1" || grep -qiE "$NOT_PROSE" <<<"$1"; }; }
 # Output only the three legs produce, each on its own OS, or that no local run executes.

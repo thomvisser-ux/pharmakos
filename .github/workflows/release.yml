@@ -234,10 +234,10 @@ jobs:
         if: failure() && github.event_name == 'push'
         shell: bash
         run: |
-          echo "::error title=a pushed tag cannot be moved or deleted::If the tagged commit itself is right and only its ci.yml push run was unfinished, or failed on something a re-run of its failed jobs cures (gh run rerun <that run> --failed, which rebuilds nothing that passed), then re-run THIS run once that run is green: gh run rerun $GITHUB_RUN_ID. If the fault is in the tag's name or in the tagged commit (wrong shape, not a merge commit on main, another version, no changelog section, a real test failure), this tag will never cut a release while the rulesets stand: its version number is spent, and the next one needs the owner's word. Dry-run every tag before pushing it (workflow_dispatch with the tag and the commit's sha)."
+          echo "::error title=a pushed tag cannot be moved or deleted::If the tagged commit itself is right and only its ci.yml push run was unfinished, or failed on something a re-run of its failed jobs cures (gh run rerun <that run> --failed, which rebuilds nothing that passed), then re-run THIS run once that run is green: gh run rerun $GITHUB_RUN_ID. If the create step failed because a draft for this tag already exists, delete that draft release (never the tag) and re-run this run. If the fault is in the tag's name or in the tagged commit (wrong shape, not a merge commit on main, another version, no changelog section, a real test failure), or the push run's zips have expired, this tag will never cut a release while the rulesets stand; where it named a real version, that number is spent, and the next one needs the owner's word. Dry-run every tag before pushing it (workflow_dispatch with the tag and the commit's sha)."
 
       - name: After a refusal on a dry run
         if: failure() && github.event_name != 'push'
         shell: bash
         run: |
-          echo "::notice title=the dry run refused this tag::Nothing was created and no tag exists. Cure the cause above, then dry-run again with the same tag and the sha of the commit it is meant for (a dry run with no sha checks main's head as it is at that moment)."
+          echo "::notice title=the dry run refused this tag::This dry run created nothing. Cure the cause above, then dry-run again with the same tag and the sha of the commit it is meant for (a dry run with no sha checks main's head as it is at that moment)."

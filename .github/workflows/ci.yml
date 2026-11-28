@@ -50,7 +50,7 @@
 # `id: scope`. It answers
 # `prose_only=true` only for a `pull_request` whose merge commit changes nothing but
 # `docs/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**` and top-level `*.md`, less the files a test
-# reads and every playbook (`READ_BY_THE_SUITE` and `DATA_EXTENSION` in scope.rs), and false on every
+# reads (`READ_BY_THE_SUITE` and `CORPUS_UNDER_PROSE` in scope.rs), and false on every
 # other event and on any error (the rules and their tests are in xtask/src/scope.rs).
 #
 # The rules for editing this file around it:

@@ -23,8 +23,8 @@
 //! * `git diff --no-renames --no-relative --ignore-submodules=none --name-only
 //!   -z HEAD^1 HEAD` names at least one path, and every path it names is on the
 //!   allow-list: `docs/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**` and a
-//!   top-level `*.md`, less the files a test reads and every playbook
-//!   ([`READ_BY_THE_SUITE`], [`DATA_EXTENSION`]).
+//!   top-level `*.md`, less the files a test reads
+//!   ([`READ_BY_THE_SUITE`], [`CORPUS_UNDER_PROSE`]).
 //!
 //! Why that diff and no other. `HEAD^1..HEAD` is exactly what the pull request
 //! changes against the base branch as it is now: `HEAD^2..HEAD` would be the
@@ -66,7 +66,7 @@ use std::process::Stdio;
 const PULL_REQUEST: &str = "pull_request";
 
 /// Directories whose files are prose, as `git diff` spells a path, less what
-/// [`READ_BY_THE_SUITE`] and [`DATA_EXTENSION`] take out.
+/// [`READ_BY_THE_SUITE`] and [`CORPUS_UNDER_PROSE`] take out.
 const PROSE_DIRECTORIES: &[&str] = &["docs/", ".claude/"];
 
 /// Top-level files that are prose by name. Every other top-level `*.md` is prose
@@ -90,10 +90,31 @@ const PROSE_FILES: &[&str] = &["AGENTS.md", "CLAUDE.md"];
 /// of the three operating systems the suite runs on fold case in file names.
 const READ_BY_THE_SUITE: &[&str] = &["CHANGELOG.md", "docs/design/s3-plan.md"];
 
-/// A playbook is data, wherever it lies: `pharmakos-plan-core`'s reader corpus
-/// walks `docs/demo` for `.jsonc` files, so one under a prose directory is not
-/// prose.
-const DATA_EXTENSION: &str = ".jsonc";
+/// Folders under a prose directory that a test walks for data, and the
+/// extensions it reads there: `pharmakos-plan-core`'s reader corpus walks
+/// `docs/demo`, subfolders included, for `.jsonc` and `.json` files
+/// (`CORPUS_ROOTS` in `crates/plan-core/src/verify/differential.rs`). A file it
+/// would read is not prose; its neighbours (the run sheets) are.
+const CORPUS_UNDER_PROSE: &[&str] = &["docs/demo/"];
+
+/// The extensions that corpus reads.
+const CORPUS_EXTENSIONS: &[&str] = &[".jsonc", ".json"];
+
+/// True when `path` begins with `prefix`, ASCII case folded.
+fn starts_with_ignoring_case(path: &str, prefix: &str) -> bool {
+    path.get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+}
+
+/// True when a corpus under a prose directory would read `path`.
+fn is_corpus_file(path: &str) -> bool {
+    CORPUS_UNDER_PROSE
+        .iter()
+        .any(|folder| starts_with_ignoring_case(path, folder))
+        && CORPUS_EXTENSIONS
+            .iter()
+            .any(|extension| ends_with_ignoring_case(path, extension))
+}
 
 /// True when `path` ends with `suffix`, ASCII case folded.
 fn ends_with_ignoring_case(path: &str, suffix: &str) -> bool {
@@ -145,13 +166,14 @@ impl Scope {
 /// root, is prose: under `docs/` or `.claude/`, `AGENTS.md`, `CLAUDE.md`, or a
 /// `*.md` at the top level. A `*.md` anywhere else — `godot/README.md`, a
 /// golden area's `README.md` — is not prose: those files sit beside what the
-/// suite checks, and some of them are inputs to it. Nor is a file a test reads
-/// ([`READ_BY_THE_SUITE`]) or a playbook ([`DATA_EXTENSION`]), wherever it is.
+/// suite checks, and some of them are inputs to it. Nor is a file a test reads:
+/// one [`READ_BY_THE_SUITE`] names, or one a corpus walks for
+/// ([`CORPUS_UNDER_PROSE`]).
 pub(crate) fn is_prose(path: &str) -> bool {
     if READ_BY_THE_SUITE
         .iter()
         .any(|read| read.eq_ignore_ascii_case(path))
-        || ends_with_ignoring_case(path, DATA_EXTENSION)
+        || is_corpus_file(path)
     {
         return false;
     }
@@ -413,7 +435,9 @@ mod tests {
             "docs/design/s3-plan.md",
             "docs/demo/p6b-structures.jsonc",
             "docs/demo/new-playbook.JSONC",
-            ".claude/notes/sample.jsonc",
+            "docs/demo/notes.json",
+            "docs/demo/round-2/deeper.jsonc",
+            "Docs/Demo/folded.jsonc",
         ] {
             assert!(!is_prose(path), "{path}");
             assert!(!classify(&paths(&[path])).prose_only(), "{path}");
@@ -422,32 +446,53 @@ mod tests {
             "docs/design/s4-plan.md",
             "docs/demo/p6-run-sheet.md",
             "docs/design/s3-plan.md.orig",
+            // Outside the folder the corpus walks, nothing reads these.
+            "docs/spikes/g4/sample.jsonc",
+            ".claude/settings.json",
+            "docs/demo/",
         ] {
             assert!(is_prose(path), "{path}");
         }
     }
 
-    /// Every file the list names exists, so the list cannot outlive what it
-    /// protects; and the merge train's copy of the rule names the same files
-    /// and the same extension.
+    /// Every file and folder the lists name exists, so they cannot outlive what
+    /// they protect; and the merge train's copy of the rule is exactly these
+    /// lists, written as one anchored regex.
     #[test]
-    fn the_read_list_is_live_and_the_merge_train_repeats_it() {
+    fn the_read_lists_are_live_and_the_merge_train_repeats_them() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let train = std::fs::read_to_string(root.join("scripts/merge-train.sh"))
-            .expect("scripts/merge-train.sh");
-        let rule = train
-            .lines()
-            .find_map(|line| line.strip_prefix("NOT_PROSE='"))
-            .expect("merge-train.sh has a NOT_PROSE line");
+        let mut alternatives = Vec::new();
         for read in READ_BY_THE_SUITE {
             assert!(root.join(read).is_file(), "{read} is not a file");
-            let escaped = read.replace('.', "\\.");
-            assert!(rule.contains(&escaped), "NOT_PROSE lacks {read}: {rule}");
+            alternatives.push(read.replace('.', "\\."));
         }
-        let extension = DATA_EXTENSION.replace('.', "\\.");
+        for folder in CORPUS_UNDER_PROSE {
+            assert!(root.join(folder).is_dir(), "{folder} is not a folder");
+            for extension in CORPUS_EXTENSIONS {
+                alternatives.push(format!("{folder}.*{}", extension.replace('.', "\\.")));
+            }
+        }
+        let expected = format!("NOT_PROSE='^({})$'", alternatives.join("|"));
+        let train = std::fs::read_to_string(root.join("scripts/merge-train.sh"))
+            .expect("scripts/merge-train.sh");
         assert!(
-            rule.contains(&extension),
-            "NOT_PROSE lacks {DATA_EXTENSION}: {rule}"
+            train.lines().any(|line| line == expected),
+            "scripts/merge-train.sh has no line `{expected}`"
+        );
+    }
+
+    /// The decision on a real merge commit: a pull request that edits only the
+    /// changelog runs everything.
+    #[test]
+    fn a_pull_request_that_edits_only_the_changelog_runs_everything() {
+        let repo = Repo::new("changelog-only");
+        let head = repo.pull_request(
+            |repo| repo.write("CHANGELOG.md", "# Changelog\n\n## next\n\nA line.\n"),
+            main_stays,
+        );
+        assert_eq!(
+            repo.decide(&head),
+            Scope::Full("`CHANGELOG.md` is not on the prose allow-list".to_owned())
         );
     }
 
